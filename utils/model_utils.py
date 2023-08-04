@@ -1,59 +1,61 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
-def double_conv(in_channels, out_channels):
-    return nn.Sequential(
-        nn.Conv3d(in_channels, out_channels, 3, padding=1),
-        nn.ReLU(inplace=True),
-        nn.Conv3d(out_channels, out_channels, 3, padding=1),
-        nn.ReLU(inplace=True)
-    )   
 
-class UNet(nn.Module):
+# Define the downsampling (encoding) block
+class Down(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(Down, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.ELU(inplace=True),
+            nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.ELU(inplace=True)
+        )
+        self.pool = nn.MaxPool3d(kernel_size=2, stride=2)
 
-    def __init__(self, n_class):
-        super().__init__()
-                
-        self.dconv_down1 = double_conv(1, 64)
-        self.dconv_down2 = double_conv(64, 128)
-        self.dconv_down3 = double_conv(128, 256)
-        self.dconv_down4 = double_conv(256, 512)        
-
-        self.maxpool = nn.MaxPool3d(2)
-        self.upsample = nn.Upsample(scale_factor=2, mode='trilinear', align_corners=True)        
-        
-        self.dconv_up3 = double_conv(256 + 512, 256)
-        self.dconv_up2 = double_conv(128 + 256, 128)
-        self.dconv_up1 = double_conv(128 + 64, 64)
-        
-        self.conv_last = nn.Conv3d(64, n_class, 1)
-        
-        
     def forward(self, x):
-        conv1 = self.dconv_down1(x)
-        x = self.maxpool(conv1)
+        conv = self.conv(x)
+        return self.pool(conv), conv
 
-        conv2 = self.dconv_down2(x)
-        x = self.maxpool(conv2)
-        
-        conv3 = self.dconv_down3(x)
-        x = self.maxpool(conv3)   
-        
-        x = self.dconv_down4(x)
-        
-        x = self.upsample(x)        
-        x = torch.cat([x, conv3], dim=1)
+# Define the upsampling (decoding) block
+class Up(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(Up, self).__init__()
+        self.up = nn.ConvTranspose3d(in_channels, out_channels, kernel_size=2, stride=2)
+        self.conv = nn.Sequential(
+            nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.ELU(inplace=True),
+            nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.ELU(inplace=True)
+        )
 
-        x = self.dconv_up3(x)
-        x = self.upsample(x)        
-        x = torch.cat([x, conv2], dim=1)       
+    def forward(self, x, skip_connection):
+        x = self.up(x)
+        # Concatenate on the channels axis
+        x = torch.cat([x, skip_connection], dim=1)
+        return self.conv(x)
 
-        x = self.dconv_up2(x)
-        x = self.upsample(x)        
-        x = torch.cat([x, conv1], dim=1)   
-        
-        x = self.dconv_up1(x)
-        
-        out = self.conv_last(x)
-        
-        return out
+# Define the U-Net model
+class UNet3D(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super(UNet3D, self).__init__()
+        self.down1 = Down(in_channels, 24)
+        self.down2 = Down(24, 24 * 2)
+        self.down3 = Down(24 * 2, 24 * 4)
+        self.down4 = Down(24 * 4, 24 * 8)
+        self.up1 = Up(24 * 8, 24 * 4)
+        self.up2 = Up(24 * 4, 24 * 2)
+        self.up3 = Up(24 * 2, 24)
+        self.conv = nn.Conv3d(24, out_channels, kernel_size=1)
+
+    def forward(self, x):
+        x, skip1 = self.down1(x)
+        x, skip2 = self.down2(x)
+        x, skip3 = self.down3(x)
+        x, _ = self.down4(x)
+        x = self.up1(x, skip3)
+        x = self.up2(x, skip2)
+        x = self.up3(x, skip1)
+        return self.conv(x)

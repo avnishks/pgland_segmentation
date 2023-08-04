@@ -11,12 +11,13 @@ python = "^3.9"
 numpy = "*"
 scipy = "*"
 pyyaml = "*"
-torch = ">=1.12"
+# torch = ">=1.12"
 surfa = ">=0.5.0"
 pandas = "^2.0.3"
 jupyterlab = "^4.0.3"
 ipykernel = "^6.24.0"
 nibabel = "^5.1.0"
+# torchsummary = "^1.5.1"
 
 [build-system]
 requires = ["poetry-core"]
