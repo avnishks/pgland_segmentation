@@ -13,7 +13,7 @@ from torchvision.transforms import Compose, Resize, ToTensor
 
 
 
-class BrainMRIDataset(Dataset):
+class PituitaryPinealDataset(Dataset):
     
     def __init__(self, image_label_list=None, data_dir=None, transform=None, save_image_label_list=False):
         """
@@ -93,18 +93,23 @@ class BrainMRIDataset(Dataset):
         image = (image - image.mean()) / image.std()
         image = image.astype(np.float16)
         return image
+
+    def _load_label(self, path):
+        label = nib.load(path).get_fdata()
+        label = label.astype(np.int16)
+        return label
     
     def __getitem__(self, idx):
         img_paths = self.image_files[idx]
         label_path = self.label_files[idx]
         
         images = [self._load_image(Path(img_path)) for img_path in img_paths]
-        label = self._load_image(Path(label_path))
+        label = self._load_label(Path(label_path))
 
+        label = self.transform(label)
         if self.transform is not None:
             images = [self.transform(image) for image in images]
 
         images = torch.stack(images)
 
         return images, label
-
