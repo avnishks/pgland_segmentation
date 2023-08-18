@@ -24,7 +24,7 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 transform = ToTensor()
 
 spatial_aug = Compose([
-  t_utils.RandomElasticAffineCrop(patch_size=160),
+  t_utils.RandomElasticAffineCrop(),
   t_utils.RandomLRFlip()
 ])
 
@@ -35,7 +35,7 @@ intensity_aug = Compose([
   t_utils.GaussianNoise()
 ])
 
-dataset = PituitaryPinealDataset(image_label_list='data_config.csv', 
+dataset = PituitaryPinealDataset(image_label_list='data_config_crop.csv', 
                                  transform=transform,
                                  spatial_augmentation=spatial_aug,
                                  intensity_augmentation=intensity_aug

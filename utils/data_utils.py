@@ -15,13 +15,21 @@ from torchvision.transforms import Compose, Resize, ToTensor
 
 class PituitaryPinealDataset(Dataset):
     
-    def __init__(self, image_label_list=None, data_dir=None, transform=None, save_image_label_list=False):
+    def __init__(self,
+                 image_label_list=None,
+                 data_dir=None,
+                 transform=None,
+                 spatial_augmentation=None,
+                 intensity_augmentation=None,
+                 save_image_label_list=False):
         """
         Args:
             image_label_list (string): CSV file with paths of the images and labels.
             data_dir (string): Directory with the data. Should have subfolders for each modality and 'labels'.
         """
         self.transform = transform
+        self.spatial = spatial_augmentation
+        self.intensity = intensity_augmentation
         
         if image_label_list is not None:
             if not os.path.isfile(image_label_list):
@@ -90,7 +98,8 @@ class PituitaryPinealDataset(Dataset):
     
     def _load_image(self, path):
         image = nib.load(path).get_fdata()
-        image = (image - image.mean()) / image.std()
+        #image = (image - image.mean()) / image.std()
+        image = nib.funcs.as_closest_canonical(img)
         image = image.astype(np.float16)
         return image
 
@@ -106,10 +115,14 @@ class PituitaryPinealDataset(Dataset):
         images = [self._load_image(Path(img_path)) for img_path in img_paths]
         label = self._load_label(Path(label_path))
 
+        # Initial transform
         label = self.transform(label)
         if self.transform is not None:
             images = [self.transform(image) for image in images]
-
         images = torch.stack(images)
 
+        # Data augmentation
+        images, label = self.spatial(images, label)
+        images = self.intensity(images)
+        
         return images, label
