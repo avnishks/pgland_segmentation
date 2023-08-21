@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
-from torchvision.transforms import Compose, Resize, ToTensor
+
 
 
 
@@ -97,14 +97,16 @@ class PituitaryPinealDataset(Dataset):
         return len(self.image_files)
     
     def _load_image(self, path):
-        image = nib.load(path).get_fdata()
+        data = nib.funcs.as_closest_canonical(nib.load(path))
+        #image = nib.load(path).get_fdata()
         #image = (image - image.mean()) / image.std()
-        image = nib.funcs.as_closest_canonical(img)
-        image = image.astype(np.float16)
+        image = data.get_fdata()
+        image = image.astype(np.float32)
         return image
 
     def _load_label(self, path):
-        label = nib.load(path).get_fdata()
+        data = nib.funcs.as_closest_canonical(nib.load(path))
+        label = data.get_fdata()
         label = label.astype(np.int16)
         return label
     
@@ -115,14 +117,20 @@ class PituitaryPinealDataset(Dataset):
         images = [self._load_image(Path(img_path)) for img_path in img_paths]
         label = self._load_label(Path(label_path))
 
+        
         # Initial transform
-        label = self.transform(label)
+        #label = self.transform(label)
         if self.transform is not None:
             images = [self.transform(image) for image in images]
         images = torch.stack(images)
+        label = torch.from_numpy(np.expand_dims(label, axis=0))
 
-        # Data augmentation
-        images, label = self.spatial(images, label)
-        images = self.intensity(images)
         
-        return images, label
+        # Data augmentation
+        if self.spatial is not None:
+            images, label = self.spatial(images, label)
+        if self.intensity is not None:
+            images = self.intensity(images)
+            
+            #breakpoint()
+        return images, label #torch.squeeze(label)

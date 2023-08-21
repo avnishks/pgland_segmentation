@@ -12,7 +12,26 @@ import cornucopia as cc #https://github.com/balbasty/cornucopia/tree/feat-psf-sl
 
 
 
-class RandomElasticAffineCrop():
+class Compose(transforms.Compose):
+    def __init__(self, transforms, gpuindex=1):
+        super().__init__(transforms)
+        self.gpuindex = gpuindex
+
+    def __call__(self, *args, cpu=True, gpu=True, **kwargs):
+        if cpu:
+            for t in self.transforms[:self.gpuindex]:
+                args = t(*args)
+        if gpu:
+            for t in self.transforms[self.gpuindex:]:
+                #breakpoint()
+                args = t(*args)
+
+        return args
+
+
+
+
+class RandomElasticAffineCrop:
     def __init__(self,
                  translation_bounds:[float,list]=0,
                  rotation_bounds:[float,list]=15,
@@ -64,7 +83,7 @@ class RandomElasticAffineCrop():
                                                        patch=patch_size)
         
     def __call__(self, img, seg):
-        img, seg = self.elastic_affine_transform(img, seg)
+        img, seg = self.spatial(img, seg)
         return img, seg
 
 
@@ -102,36 +121,34 @@ class ContrastAugmentation:
     def __init__(self, gamma_range:list=(0.5, 2), v_range:list=(None, None), **kwargs):
         self.gamma_range = gamma_range if len(gamma_range)==2 \
             else Exception("Invalid gamma_range (must be (min max))")
-        #self.v_range = v_range if len(v_range)==2 \
-        #    else Exception("Invalid v_range (must be (min max))")
-        
+        self.v_range = v_range if len(v_range)==2 \
+            else Exception("Invalid v_range (must be (min max))")
+
         self.gammacorr = cc.RandomGammaTransform(gamma=gamma_range)
                                                  #vmin=v_range[0],
                                                  #vmax=v_range[1])
 
-    def __call__(self, x):
+    def __call__(self, img):
         img = self.gammacorr(img)
 
 
         
 class BiasField:
-    def __init__(self, shape:int=8, v_range:list=(-1, 1), order:int=3, **kwargs):
+    def __init__(self, shape:int=8, v_max:list=1, order:int=3):
         self.shape = shape if isinstance(shape, int)\
             else Exception("Invalid shape (must be int)")
-        self.v_range = v_range if len(v_range)==2 \
-            else Exception("Invalid v_range (must be (min max))")
+        self.v_max = v_max if isinstance(v_max, int)\
+            else Exception("Invalid v_max (must be int)")
         self.order = order if isinstance(order, int)\
             else Exception("Invalid order (must be int)")
         
-        self.addbias = cc.RandomAddFieldTransform(shape=shape,
-                                                  vmin=v_range[0],
-                                                  vmax=v_range[1],
-                                                  order=order,
-                                                  shared=False,
-                                                  shared_field=None)
+        self.biasfield = cc.RandomMulFieldTransform(shape=shape,
+                                                    vmax=v_max,
+                                                    order=order,
+                                                    shared=False)
 
     def __call__(self, img):
-        img = self.addbias(img)
+        img = self.biasfield(img)
         return img
 
     
@@ -139,6 +156,7 @@ class BiasField:
 class GaussianNoise:
     def __init__(self, sigma:float=0.1):
         self.sigma = sigma
+        # Note:  see about RandomChiNoiseTransform (yael says it is more realistic)
         self.noise = cc.RandomGaussianNoiseTransform(sigma=sigma)
 
     def __call__(self, img):
