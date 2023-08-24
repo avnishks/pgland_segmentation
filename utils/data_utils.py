@@ -10,6 +10,7 @@ import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
 
+from . import transform_utils as t_utils
 
 
 
@@ -98,16 +99,15 @@ class PituitaryPinealDataset(Dataset):
     
     def _load_image(self, path):
         data = nib.funcs.as_closest_canonical(nib.load(path))
-        #image = nib.load(path).get_fdata()
+        image = nib.load(path).get_fdata()
         #image = (image - image.mean()) / image.std()
-        image = data.get_fdata()
         image = image.astype(np.float32)
         return image
 
     def _load_label(self, path):
         data = nib.funcs.as_closest_canonical(nib.load(path))
         label = data.get_fdata()
-        label = label.astype(np.int16)
+        label = label.astype(np.int32)
         return label
     
     def __getitem__(self, idx):
@@ -119,18 +119,20 @@ class PituitaryPinealDataset(Dataset):
 
         
         # Initial transform
-        #label = self.transform(label)
         if self.transform is not None:
+            label = self.transform(label)
             images = [self.transform(image) for image in images]
-        images = torch.stack(images)
+
+        images = torch.stack(images, dim=0)
         label = torch.from_numpy(np.expand_dims(label, axis=0))
 
+        one_hot = t_utils.AssignOneHotLabels()
+        label = one_hot(label)
         
         # Data augmentation
         if self.spatial is not None:
             images, label = self.spatial(images, label)
         if self.intensity is not None:
             images = self.intensity(images)
-            
-            #breakpoint()
-        return images, label #torch.squeeze(label)
+        
+        return images, label

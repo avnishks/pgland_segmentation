@@ -29,6 +29,11 @@ class Compose(transforms.Compose):
         return args
 
 
+    
+#class
+
+    
+
 
 
 class RandomElasticAffineCrop:
@@ -64,7 +69,7 @@ class RandomElasticAffineCrop:
             else Exception("Invalid max_elastic_displacement (must be float)")
         self.n_elastic_control_pts = n_elastic_control_pts \
             if isinstance(n_elastic_control_pts, int)\
-            else Exception("Invalid n_elastic_control_pts (must be int)")
+OA            else Exception("Invalid n_elastic_control_pts (must be int)")
         self.n_elastic_steps = n_elastic_steps \
             if isinstance(n_elastic_steps, int)\
             else Exception("Invalid n_elastic_steps (must be int)")
@@ -156,9 +161,41 @@ class BiasField:
 class GaussianNoise:
     def __init__(self, sigma:float=0.1):
         self.sigma = sigma
-        # Note:  see about RandomChiNoiseTransform (yael says it is more realistic)
         self.noise = cc.RandomGaussianNoiseTransform(sigma=sigma)
 
     def __call__(self, img):
         img = self.noise(img)
         return img
+
+
+
+
+class AssignOneHotLabels():
+    def __init__(self, index=0):
+        #self.num_classes = num_classes
+        self.index = index
+
+    def __call__(self, seg):
+        label_values = torch.unique(torch.flatten(seg))
+        onehot = torch.zeros(seg.shape)
+        onehot = onehot.repeat(len(label_values),1,1,1)
+        seg = torch.squeeze(seg)
+        
+        for i in range(0, len(label_values)):
+            onehot[i,:] = seg==label_values[i]
+        
+        return onehot.type(torch.int32)
+
+"""
+        if seg == None:
+            return img, seg
+
+        if seg.ndim == 5:
+            img, seg = zip(*[self(img[i], seg[i]) for i in range(img.shape[0])])
+            return torch.stack(img, 0), torch.stack(seg, 0)
+
+        hot = nn.functional.one_hot(seg[self.index].long(), num_classes=self.num_classes).movedim(-1,0)
+        seg = torch.cat([seg[:self.index], hot, seg[self.index+1:]], 0)
+
+        return img, seg
+"""

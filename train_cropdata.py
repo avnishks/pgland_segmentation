@@ -27,14 +27,11 @@ spatial_aug = t_utils.Compose([
   t_utils.RandomElasticAffineCrop(),
   t_utils.RandomLRFlip()
 ])
-
-#intensity_aug = None
-
 intensity_aug = t_utils.Compose([
-  #t_utils.MinMaxNorm(),
+  t_utils.MinMaxNorm(),
   t_utils.ContrastAugmentation(),
-  #t_utils.BiasField(),
-  #t_utils.GaussianNoise()
+  t_utils.BiasField(),
+  t_utils.GaussianNoise()
 ])
 
 
@@ -48,13 +45,13 @@ dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
 
 model = UNet3D(in_channels=1, 
-               out_channels=1,
+               out_channels=5, #hard coded for now but change this to grab from image data
                n_features_start=24,
                n_blocks=3, 
                n_convs_per_block=2, 
                activation_type="ReLU",
-               pooling_type="MaxPool3d").to(device)
-# summary(model, input_size=input_size)
+               pooling_type="MaxPool3d",
+).to(device)
 
 optimizer = torch.optim.Adam(model.parameters())
 loss_fn = nn.BCEWithLogitsLoss()
@@ -70,7 +67,6 @@ for epoch in range(n_epochs):
     X, y = X.to(device), y.to(device)
     with autocast():
       y_pred = model(X)
-      #breakpoint()
       loss = loss_fn(y_pred, y)
     
     # Backward pass and optimize

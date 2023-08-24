@@ -11,9 +11,10 @@ class UNet3D(nn.Module):
                  out_channels:int,
                  n_features_start:int=24, # this could just be hard coded? depends if n=24 is valid
                  n_blocks:int=4,
-                 n_convs_per_block:int=2, # can this be the same for each block? or should user be able to change it
+                 n_convs_per_block:int=2,
                  activation_type:str='ReLU',
-                 pooling_type:str='MaxPool3d'):
+                 pooling_type:str='MaxPool3d',
+                 **kwargs):
         super(UNet3D, self).__init__()
         
         # Validate arguments
@@ -22,26 +23,36 @@ class UNet3D(nn.Module):
         self.n_features_start = n_features_start
         self.n_blocks = n_blocks
         self.n_convs_per_block = n_convs_per_block
-        self.activation_type = activation_type
-        self.pooling_type = pooling_type
-        ### to do: check if nn.(activation_type) and nn.(pooling_type) exist, else throw error
-        ############ (assert(callable(getattr(parent,'name'))))
 
+        self.activation_type = activation_type if callable(getattr(nn, activation_type)) \
+            else Exception("Invalid activation_type (not an attribute of torch.nn")
+        self.pooling_type = pooling_type if callable(getattr(nn, pooling_type)) \
+            else Exception("Invalid pooling_type (not an attribute of torch.nn")
         
         self.blocks = nn.Sequential()
-                
+
+        
         # Encoding blocks (down = conv + activation --> pooling)
         n_input_features = in_channels
         n_output_features = n_features_start
-
+        
         for b in range(0, n_blocks):
             if b == n_blocks - 1:
-                block = _UNet3D_DownBlock(n_input_features, n_output_features,
-                                          n_convs_per_block, activation_type, pooling_type,
-                                          pool=False)
+                block = _UNet3D_DownBlock(in_channels=n_input_features,
+                                          out_channels=n_output_features,
+                                          n_convs_per_block=n_convs_per_block,
+                                          activation_type=activation_type,
+                                          pooling_type=pooling_type,
+                                          pool=False,
+                )
             else:
-                block = _UNet3D_DownBlock(n_input_features, n_output_features,
-                                      n_convs_per_block, activation_type, pooling_type)
+                block = _UNet3D_DownBlock(in_channels=n_input_features,
+                                          out_channels=n_output_features,
+                                          n_convs_per_block=n_convs_per_block,
+                                          activation_type=activation_type,
+                                          pooling_type=pooling_type,
+                                          pool=True,
+                )
             self.blocks.add_module('down%d' % (b+1), block)
             n_input_features = n_output_features
             n_output_features = n_output_features * 2
@@ -52,10 +63,16 @@ class UNet3D(nn.Module):
 
         for b in range(0, n_blocks):
             if b == n_blocks - 1:
-                block = nn.Conv3d(n_input_features, out_channels, kernel_size=1)
+                block = nn.Conv3d(n_input_features,
+                                  out_channels,
+                                  kernel_size=1
+                )
             else:
-                block = _UNet3D_UpBlock(n_input_features, n_output_features,
-                                        n_convs_per_block, activation_type)
+                block = _UNet3D_UpBlock(in_channels=n_input_features,
+                                        out_channels=n_output_features,
+                                        n_convs_per_block=n_convs_per_block,
+                                        activation_type=activation_type
+                )
             self.blocks.add_module('up%d' % (b+1), block)
             n_input_features = n_output_features
             n_output_features = n_output_features // 2
@@ -106,7 +123,8 @@ class _UNet3D_DownBlock(nn.Module):
                  n_convs_per_block:int,
                  activation_type:str,
                  pooling_type:str,
-                 pool=True):
+                 pool=True,
+    ):
         super(_UNet3D_DownBlock, self).__init__()
         self.n_convs = n_convs_per_block
         self.pool = pool
@@ -117,14 +135,22 @@ class _UNet3D_DownBlock(nn.Module):
 
         for n in range(0, n_convs_per_block):
             if n == 0:
-                layer = nn.Sequential(nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1),
-                                      getattr(nn, activation_type)(inplace=True))
+                layer = nn.Sequential(nn.Conv3d(in_channels,
+                                                out_channels,
+                                                kernel_size=3,
+                                                padding=1),
+                                      getattr(nn, activation_type)(inplace=True)
+                )
             else:
-                layer = nn.Sequential(nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1),\
-                                      getattr(nn, activation_type)(inplace=True))
+                layer = nn.Sequential(nn.Conv3d(out_channels,
+                                                out_channels,
+                                                kernel_size=3,
+                                                padding=1),\
+                                      getattr(nn, activation_type)(inplace=True)
+                )
             self.conv_block.add_module('convlayer%d' % (n+1), layer)
 
-            
+
     def forward(self, x):
         for n in range(0, self.n_convs):
             x = self.conv_block.__getattr__('convlayer%d' % (n+1))(x)
@@ -142,7 +168,8 @@ class _UNet3D_UpBlock(nn.Module):
                  in_channels:int,
                  out_channels:int,
                  n_convs_per_block:int,
-                 activation_type:str):
+                 activation_type:str
+    ):
         super(_UNet3D_UpBlock, self).__init__()
         self.n_convs = n_convs_per_block
         
@@ -152,13 +179,26 @@ class _UNet3D_UpBlock(nn.Module):
         
         for n in range(0,n_convs_per_block):    
             if n == 0:
-                layer = nn.Sequential(
-                    nn.ConvTranspose3d(in_channels, out_channels, kernel_size=3, padding=1),
-                    getattr(nn, activation_type)(inplace=True))
+                layer = nn.Sequential(nn.ConvTranspose3d(in_channels=in_channels,
+                                                         out_channels=out_channels,
+                                                         kernel_size=3,
+                                                         padding=1),
+                                      getattr(nn, activation_type)(inplace=True)
+                )
+            elif n == n_convs_per_block - 1:
+                layer = nn.Sequential(nn.ConvTranspose3d(in_channels=out_channels,
+                                                         out_channels=out_channels,
+                                                         kernel_size=3,
+                                                         padding=1),
+                                      nn.Softmax(dim=0)
+                )
             else:
-                layer = nn.Sequential(
-                    nn.ConvTranspose3d(out_channels, out_channels, kernel_size=3, padding=1),
-                    getattr(nn, activation_type)(inplace=True))
+                layer = nn.Sequential(nn.ConvTranspose3d(in_channels=out_channels,
+                                                         out_channels=out_channels,
+                                                         kernel_size=3,
+                                                         padding=1),
+                                      getattr(nn, activation_type)(inplace=True)
+                )
             self.conv_block.add_module('convlayer%d' % (n+1), layer)
         
 
