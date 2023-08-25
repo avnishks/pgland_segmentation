@@ -100,16 +100,16 @@ class UNet3D(nn.Module):
         # Up
         decoding[0] = encoding[-1]
         for b in range(0, self.n_blocks):
-            print("Up", b+1)
-            print("input:", decoding[b].shape)
+            #print("Up", b+1)
+            #print("input:", decoding[b].shape)
             if b != self.n_blocks - 1:
                 skip_ind = self.n_blocks - b - 2
-                print("skip:", skips[skip_ind].shape)
+                #print("skip:", skips[skip_ind].shape)
                 decoding[b+1] = self.blocks.__getattr__('up%d' % (b+1))(decoding[b], skips[skip_ind])
             else:
                 decoding[b+1] = self.blocks.__getattr__('up%d' % (b+1))(decoding[b])
-            print("output:", decoding[b+1].shape)
-            print(" ")
+            #print("output:", decoding[b+1].shape)
+            #print(" ")
             
         return decoding[-1]
                 

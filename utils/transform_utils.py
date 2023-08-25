@@ -29,55 +29,27 @@ class Compose(transforms.Compose):
         return args
 
 
-    
-#class
-
-    
-
 
 
 class RandomElasticAffineCrop:
     def __init__(self,
-                 translation_bounds:[float,list]=0,
+                 translation_bounds:[float,list]=0.0,
                  rotation_bounds:[float,list]=15,
                  shear_bounds:[float,list]=0.012,
                  scale_bounds:[float,list]=0.15,
                  max_elastic_displacement:[float,list]=0.15,
                  n_elastic_control_pts:int=5,
                  n_elastic_steps:int=0,
-                 patch_size:int=None,
+                 patch_size:[int,list]=None,
                  **kwargs):
 
-        # Check input args
-        self.n_dims = 3
+        n_dims = 3
+        if isinstance(translation_bounds, list): assert len(translation_bounds) == n_dims
+        if isinstance(rotation_bounds, list): assert len(rotation_bounds) == n_dims
+        if isinstance(shear_bounds, list): assert len(shear_bounds) == n_dims
+        if isinstance(scale_bounds, list): assert len(scale_bounds) == n_dims
+        if isinstance(patch_size, list): assert len() == n_dims
 
-        """
-        self.translation_bounds = translation_bounds \
-            if len(translation_bounds) == self.n_dims or isinstance(translation_bounds, float)\
-            else Exception("Invalid translation_bounds (must be [x y z] or float)")
-        self.rotation_bounds = rotation_bounds \
-            if len(rotation_bounds) == self.n_dims or isinstance(rotation_bounds, float)\
-            else Exception("Invalid rotation_bounds (must be [xy xz yz] or float)")
-        self.shear_bounds = shear_bounds \
-            if len(shear_bounds) == self.n_dims or isinstance(shear_bounds, float)\
-            else Exception("Invalid shear_bounds (must be [xy xz yz] or float)")
-        self.scale_bounds = scale_bounds \
-            if len(scale_bounds) == self.n_dims or isinstance(scale_bounds, float)\
-            else Exception("Invalid scale_bounds (must be [x y z] or float)")
-        self.max_elastic_displacement = max_elastic_displacement \
-            if isinstance(max_elastic_displacement, float)\
-            else Exception("Invalid max_elastic_displacement (must be float)")
-        self.n_elastic_control_pts = n_elastic_control_pts \
-            if isinstance(n_elastic_control_pts, int)\
-OA            else Exception("Invalid n_elastic_control_pts (must be int)")
-        self.n_elastic_steps = n_elastic_steps \
-            if isinstance(n_elastic_steps, int)\
-            else Exception("Invalid n_elastic_steps (must be int)")
-        self.patch_size = patch_size \
-            if len(patch_size) == n_dims or isinstance(patch_size, int)\
-            else Exception("Invalid patch_size (must be [x y z] or int)")
-        """
-        
         self.spatial = cc.RandomAffineElasticTransform(translations=translation_bounds,
                                                        rotations=rotation_bounds,
                                                        shears=shear_bounds,
@@ -107,7 +79,7 @@ class RandomLRFlip:
 
 
 class MinMaxNorm:
-    def __init__(self, minim:float=0, maxim:float=0, **kwargs):
+    def __init__(self, minim:float=0, maxim:float=1, **kwargs):
         self.minim = minim
         self.maxim = maxim
 
@@ -135,7 +107,7 @@ class ContrastAugmentation:
 
     def __call__(self, img):
         img = self.gammacorr(img)
-
+        return img
 
         
 class BiasField:
@@ -171,31 +143,19 @@ class GaussianNoise:
 
 
 class AssignOneHotLabels():
-    def __init__(self, index=0):
-        #self.num_classes = num_classes
+    def __init__(self, label_values=None, index=0):
+        self.label_values = label_values
         self.index = index
 
     def __call__(self, seg):
-        label_values = torch.unique(torch.flatten(seg))
+        if self.label_values == None:
+            self.label_values = torch.unique(torch.flatten(seg))
+
         onehot = torch.zeros(seg.shape)
-        onehot = onehot.repeat(len(label_values),1,1,1)
+        onehot = onehot.repeat(len(self.label_values),1,1,1)
         seg = torch.squeeze(seg)
         
-        for i in range(0, len(label_values)):
-            onehot[i,:] = seg==label_values[i]
-        
-        return onehot.type(torch.int32)
+        for i in range(0, len(self.label_values)):
+            onehot[i,:] = seg==self.label_values[i]
 
-"""
-        if seg == None:
-            return img, seg
-
-        if seg.ndim == 5:
-            img, seg = zip(*[self(img[i], seg[i]) for i in range(img.shape[0])])
-            return torch.stack(img, 0), torch.stack(seg, 0)
-
-        hot = nn.functional.one_hot(seg[self.index].long(), num_classes=self.num_classes).movedim(-1,0)
-        seg = torch.cat([seg[:self.index], hot, seg[self.index+1:]], 0)
-
-        return img, seg
-"""
+        return onehot.type(torch.float32)

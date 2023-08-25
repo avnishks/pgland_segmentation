@@ -22,6 +22,7 @@ class PituitaryPinealDataset(Dataset):
                  transform=None,
                  spatial_augmentation=None,
                  intensity_augmentation=None,
+                 data_labels:list=None,
                  save_image_label_list=False):
         """
         Args:
@@ -31,7 +32,8 @@ class PituitaryPinealDataset(Dataset):
         self.transform = transform
         self.spatial = spatial_augmentation
         self.intensity = intensity_augmentation
-        
+        self.OneHot = t_utils.AssignOneHotLabels(label_values=data_labels)
+
         if image_label_list is not None:
             if not os.path.isfile(image_label_list):
                 raise ValueError(f'File {image_label_list} does not exist')
@@ -109,6 +111,7 @@ class PituitaryPinealDataset(Dataset):
         label = data.get_fdata()
         label = label.astype(np.int32)
         return label
+
     
     def __getitem__(self, idx):
         img_paths = self.image_files[idx]
@@ -125,14 +128,13 @@ class PituitaryPinealDataset(Dataset):
 
         images = torch.stack(images, dim=0)
         label = torch.from_numpy(np.expand_dims(label, axis=0))
-
-        one_hot = t_utils.AssignOneHotLabels()
-        label = one_hot(label)
         
         # Data augmentation
         if self.spatial is not None:
             images, label = self.spatial(images, label)
         if self.intensity is not None:
             images = self.intensity(images)
+
+        label = self.OneHot(label)
         
         return images, label

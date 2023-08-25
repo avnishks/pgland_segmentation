@@ -23,22 +23,20 @@ logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
 transform = transforms.ToTensor()
 
-spatial_aug = t_utils.Compose([
-  t_utils.RandomElasticAffineCrop(),
-  t_utils.RandomLRFlip()
+spatial_aug = t_utils.Compose([t_utils.RandomElasticAffineCrop(),
+                               t_utils.RandomLRFlip()
 ])
-intensity_aug = t_utils.Compose([
-  t_utils.MinMaxNorm(),
-  t_utils.ContrastAugmentation(),
-  t_utils.BiasField(),
-  t_utils.GaussianNoise()
+intensity_aug = t_utils.Compose([#t_utils.ContrastAugmentation(),
+                                 #t_utils.BiasField(),
+                                 #t_utils.GaussianNoise()
+                                 t_utils.MinMaxNorm(),
 ])
-
-
+data_labels = (0, 883, 900, 903, 904)
 dataset = PituitaryPinealDataset(image_label_list='data_config_crop.csv', 
                                  transform=transform,
                                  spatial_augmentation=spatial_aug,
-                                 intensity_augmentation=None #intensity_aug
+                                 intensity_augmentation=intensity_aug,
+                                 data_labels=data_labels,
 )
 
 dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
