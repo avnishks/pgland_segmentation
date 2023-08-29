@@ -17,63 +17,90 @@ import pandas as pd
 import numpy as np
 import nibabel as nib
 
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
-
-logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
-
-transform = ToTensor()
-
-spatial_aug = Compose([
-  t_utils.RandomElasticAffineCrop(patch_size=160),
-  t_utils.RandomLRFlip()
-])
-
-intensity_aug = Compose([
-  t_utils.MinMaxNorm(),
-  t_utils.ContrastAugmentation(),
-  t_utils.BiasField(),
-  t_utils.GaussianNoise()
-])
-
-dataset = PituitaryPinealDataset(image_label_list='data_config.csv', 
-                                 transform=transform,
-                                 spatial_augmentation=spatial_aug,
-                                 intensity_augmentation=intensity_aug
-)
-
-dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
 
-model = UNet3D(in_channels=1, 
-               out_channels=2, 
-               n_features_start=24,
-               num_blocks=3, 
-               num_convs_per_block=2, 
-               activation_type="ReLU",
-               pooling_type="MaxPool3d").to(device)
-# summary(model, input_size=input_size)
+### Data visualization tool
+def call_freeview(img, onehot):
+  volume = img[0,0,:]
+  seg = torch.zeros(volume.shape)
 
-optimizer = torch.optim.Adam(model.parameters())
-loss_fn = nn.BCELoss()
+  for i in range(onehot.shape[1]):
+    seg += i * onehot[0,i,:]
 
-# Training loop
-num_epochs = 10
-for epoch in range(num_epochs):
+  fv = fs.Freeview()
+  fv.vol(volume)
+  fv.vol(seg, colormap='lut')
+  fv.show()
 
+
+
+### Define loops up here (clean up later) ###
+def training_loop(dataloader, model, loss_fn, optimizer):
+  model.train()
   for X, y in dataloader:
-    optimizer.zero_grad()    
-    
-    # Forward pass and loss
+    optimizer.zero_grad()
+
     X, y = X.to(device), y.to(device)
     with autocast():
       y_pred = model(X)
       loss = loss_fn(y_pred, y)
-    
-    # Backward pass and optimize
+
     loss.backward()
     optimizer.step()
-    
-  print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
 
-print('Training complete!')
+  print(f'Training loss: {loss.item():>.4f}')
 
+
+def validation_loop(dataloader, model, loss_fn):
+  size = len(dataloader.dataset)
+  num_batches = len(dataloader)
+  valid_loss, correct = 0, 0
+
+  model.eval()
+  for X, y in dataloader:
+    X, y = X.to(device), y.to(device)
+
+    with torch.no_grad():
+      y_pred = model(X)
+      valid_loss += loss_fn(y_pred, y)
+      correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()/y.numel()
+
+  valid_loss /= num_batches
+  correct /= size
+
+  print(f'Accuracy: {(100*correct):>0.1f}%,  Avg loss: {valid_loss:>.4f}')
+
+
+
+### Set up
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
+logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
+
+data_config = 'data_config.csv'
+train_data, valid_data, test_data, n_labels = call_dataset(data_config)
+
+train_loader = DataLoader(train_data, batch_size=1, shuffle=True)
+valid_loader = DataLoader(valid_data, batch_size=1, shuffle=True)
+test_loader = DataLoader(test_data, batch_size=1, shuffle=True)
+
+model = UNet3D(in_channels=1, 
+               out_channels=len(data_labels),
+               n_features_start=24,
+               num_blocks=3, 
+               num_convs_per_block=2, 
+               activation_type="ReLU",
+               pooling_type="MaxPool3d"
+).to(device)
+
+optimizer = torch.optim.Adam(model.parameters())
+loss_fn = nn.BCEWithLogitsLoss()
+
+
+### Training ###
+n_epochs = 10
+for epoch in range(n_epochs):
+  print(f"\nEpoch [{epoch+1}/{n_epochs}]\n-------------------")
+  training_loop(dataloader, model, loss_fn, optimizer)
+  validation_loop(dataloader, model, loss_fn)
+
+print('Done!')

@@ -4,7 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-from utils.data_utils import PituitaryPinealDataset
+from utils.data_utils import call_dataset
+
 from utils.model_utils import UNet3D
 from utils import transform_utils as t_utils
 import losses
@@ -16,6 +17,23 @@ from torch.cuda.amp import autocast
 import pandas as pd
 import numpy as np
 import nibabel as nib
+import freesurfer as fs
+
+
+
+### Data visualization tool
+def call_freeview(img, onehot):
+  volume = img[0,0,:]
+  seg = torch.zeros(volume.shape)
+
+  for i in range(onehot.shape[1]):
+    seg += i * onehot[0,i,:]
+      
+  fv = fs.Freeview()
+  fv.vol(volume)
+  fv.vol(seg, colormap='lut')
+  fv.show()
+
 
 
 ### Define loops up here (clean up later) ###
@@ -49,13 +67,13 @@ def validation_loop(dataloader, model, loss_fn):
     with torch.no_grad():
       y_pred = model(X)
       valid_loss += loss_fn(y_pred, y)
-      correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()
+      correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()/y.numel()
 
   valid_loss /= num_batches
   correct /= size
 
-  print(f'Validation loss: {valid_loss:>.4f}')
-  #print(f'Accuracy: {(100*correct):>0.1f},  Avg loss: {valid_loss:>.4f}')
+  #print(f'Validation loss: {valid_loss:>.4f}')
+  print(f'Accuracy: {(100*correct):>0.1f}%,  Avg loss: {valid_loss:>.4f}')
 
 
 
@@ -64,26 +82,15 @@ def validation_loop(dataloader, model, loss_fn):
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
 logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
 
-transform = transforms.ToTensor()
-spatial_aug = t_utils.Compose([t_utils.RandomElasticAffineCrop(),
-                               t_utils.RandomLRFlip()
-])
-intensity_aug = t_utils.Compose([#t_utils.ContrastAugmentation(),
-                                 #t_utils.BiasField(),
-                                 #t_utils.GaussianNoise()
-                                 t_utils.MinMaxNorm(),
-])
-data_labels = (0, 883, 900, 903, 904)
-dataset = PituitaryPinealDataset(image_label_list='data_config_crop.csv', 
-                                 transform=transform,
-                                 spatial_augmentation=spatial_aug,
-                                 intensity_augmentation=intensity_aug,
-                                 data_labels=data_labels,
-)
-dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
+data_config = 'data_config_crop.csv'
+train_data, valid_data, test_data, n_labels = call_dataset(data_config)
+
+train_loader = DataLoader(train_data, batch_size=1, shuffle=True)
+valid_loader = DataLoader(valid_data, batch_size=1, shuffle=True)
+test_loader = DataLoader(test_data, batch_size=1, shuffle=True)
 
 model = UNet3D(in_channels=1, 
-               out_channels=len(data_labels),
+               out_channels=n_labels,
                n_features_start=24,
                n_blocks=3, 
                n_convs_per_block=2, 
@@ -99,7 +106,7 @@ loss_fn = nn.BCEWithLogitsLoss()
 n_epochs = 10
 for epoch in range(n_epochs):
   print(f"\nEpoch [{epoch+1}/{n_epochs}]\n-------------------")
-  training_loop(dataloader, model, loss_fn, optimizer)
-  validation_loop(dataloader, model, loss_fn)
+  training_loop(train_loader, model, loss_fn, optimizer)
+  validation_loop(valid_loader, model, loss_fn)
   
 print('Done!')

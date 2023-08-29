@@ -9,29 +9,38 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
+import freesurfer as fs
 
 from . import transform_utils as t_utils
 
 
 
+def call_freeview(img, seg):
+    fv = fs.Freeview()
+    fv.vol(img[0,:])
+    fv.vol(seg[0,:], colormap='lut')
+    fv.show()
+
+
 class PituitaryPinealDataset(Dataset):
-    
     def __init__(self,
+                 data_range:list,
                  image_label_list=None,
                  data_dir=None,
                  transform=None,
-                 spatial_augmentation=None,
-                 intensity_augmentation=None,
+                 augmentation=None,
                  data_labels:list=None,
-                 save_image_label_list=False):
+                 save_image_label_list=False,
+                 **kwargs):
         """
         Args:
             image_label_list (string): CSV file with paths of the images and labels.
             data_dir (string): Directory with the data. Should have subfolders for each modality and 'labels'.
         """
+        self.data_range = data_range
+        
         self.transform = transform
-        self.spatial = spatial_augmentation
-        self.intensity = intensity_augmentation
+        self.augmentation = augmentation
         self.OneHot = t_utils.AssignOneHotLabels(label_values=data_labels)
 
         if image_label_list is not None:
@@ -40,8 +49,8 @@ class PituitaryPinealDataset(Dataset):
 
             # Read the image and label paths from the file
             df = pd.read_csv(image_label_list, header=None)
-            self.image_files = df.iloc[:, :-1].values.tolist()
-            self.label_files = df.iloc[:, -1].values.tolist()
+            self.image_files = df.iloc[data_range, :-1].values.tolist()
+            self.label_files = df.iloc[data_range, -1].values.tolist()
 
         elif data_dir is not None:
             data_dir = Path(data_dir)
@@ -101,15 +110,12 @@ class PituitaryPinealDataset(Dataset):
     
     def _load_image(self, path):
         data = nib.funcs.as_closest_canonical(nib.load(path))
-        image = nib.load(path).get_fdata()
-        #image = (image - image.mean()) / image.std()
-        image = image.astype(np.float32)
+        image = data.get_fdata().astype(np.float32)
         return image
 
     def _load_label(self, path):
         data = nib.funcs.as_closest_canonical(nib.load(path))
-        label = data.get_fdata()
-        label = label.astype(np.int32)
+        label = data.get_fdata().astype(np.int32)
         return label
 
     
@@ -128,13 +134,52 @@ class PituitaryPinealDataset(Dataset):
 
         images = torch.stack(images, dim=0)
         label = torch.from_numpy(np.expand_dims(label, axis=0))
+
         
         # Data augmentation
-        if self.spatial is not None:
-            images, label = self.spatial(images, label)
-        if self.intensity is not None:
-            images = self.intensity(images)
+        if self.augmentation is not None:
+            images, label = self.augmentation(images, label)
 
         label = self.OneHot(label)
         
         return images, label
+
+
+
+def call_dataset(data_config_csv:str):
+    data_config = data_config_csv
+    data_labels = (0, 883, 900, 903, 904)
+    
+    transform = transforms.ToTensor()
+    augmentation = t_utils.Compose([t_utils.RandomElasticAffineCrop(),
+                                    t_utils.RandomLRFlip(),
+                                    t_utils.ContrastAugmentation(),
+                                    t_utils.BiasField(),
+                                    t_utils.GaussianNoise(),
+                                    t_utils.MinMaxNorm()
+    ])
+    
+    train_range = range(0,36)
+    valid_range = range(36,50)
+    test_range = range(50,64)
+
+    train = PituitaryPinealDataset(data_range = train_range,
+                                   image_label_list=data_config,
+                                   transform=transform,
+                                   augmentation=augmentation,
+                                   data_labels=data_labels,
+    )
+    valid = PituitaryPinealDataset(data_range = valid_range,
+                                   image_label_list=data_config,
+                                   transform=transform,
+                                   augmentation=augmentation,
+                                   data_labels=data_labels,
+    )
+    test = PituitaryPinealDataset(data_range = test_range,
+                                   image_label_list=data_config,
+                                   transform=transform,
+                                   augmentation=augmentation,
+                                   data_labels=data_labels,
+    )
+
+    return train, valid, test, len(data_labels)
