@@ -38,6 +38,9 @@ def call_freeview(img, onehot):
 
 ### Define loops up here (clean up later) ###
 def training_loop(dataloader, model, loss_fn, optimizer):
+  size = len(dataloader.dataset)
+  num_batches = len(dataloader)
+  
   model.train()
   for X, y in dataloader:
     optimizer.zero_grad()
@@ -53,12 +56,10 @@ def training_loop(dataloader, model, loss_fn, optimizer):
   print(f'Training loss: {loss.item():>.4f}')
 
 
-    
-
 def validation_loop(dataloader, model, loss_fn):
   size = len(dataloader.dataset)
   num_batches = len(dataloader)
-  valid_loss, correct = 0, 0
+  loss, correct = 0, 0
 
   model.eval()
   for X, y in dataloader:
@@ -66,14 +67,14 @@ def validation_loop(dataloader, model, loss_fn):
     
     with torch.no_grad():
       y_pred = model(X)
-      valid_loss += loss_fn(y_pred, y)
+      loss += loss_fn(y_pred, y)
       correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()/y.numel()
 
-  valid_loss /= num_batches
+  loss /= num_batches
   correct /= size
 
-  #print(f'Validation loss: {valid_loss:>.4f}')
-  print(f'Accuracy: {(100*correct):>0.1f}%,  Avg loss: {valid_loss:>.4f}')
+  print(f'Validation loss: {loss:>.4f}')
+  #print(f'Accuracy: {(100*correct):>0.1f}%,  Validation loss: {loss:>.4f}') #(accuracy isn't correct..)
 
 
 
@@ -102,11 +103,22 @@ loss_fn = nn.BCEWithLogitsLoss()
 
 
 
-### Train the model ###
+### Run the model ###
 n_epochs = 10
 for epoch in range(n_epochs):
   print(f"\nEpoch [{epoch+1}/{n_epochs}]\n-------------------")
   training_loop(train_loader, model, loss_fn, optimizer)
   validation_loop(valid_loader, model, loss_fn)
   
-print('Done!')
+print('Testing...\n-------------------')
+test_loss, correct = 0, 0
+for X, y in test_loader:
+    X, y = X.to(device), y.to(device)
+
+    with torch.no_grad():
+      y_pred = model(X)
+      test_loss += loss_fn(y_pred, y)
+      correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()/y.numel()
+
+test_loss /= len(test_loader)
+print(f'Loss: {test_loss:>.4f}')
