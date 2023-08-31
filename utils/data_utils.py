@@ -1,6 +1,7 @@
 import os
 from glob import glob
 from pathlib import Path
+import random
 
 import logging
 import pandas as pd
@@ -24,7 +25,7 @@ def call_freeview(img, seg):
 
 class PituitaryPinealDataset(Dataset):
     def __init__(self,
-                 data_range:list,
+                 data_inds:list,
                  image_label_list=None,
                  data_dir=None,
                  transform=None,
@@ -37,20 +38,24 @@ class PituitaryPinealDataset(Dataset):
             image_label_list (string): CSV file with paths of the images and labels.
             data_dir (string): Directory with the data. Should have subfolders for each modality and 'labels'.
         """
-        self.data_range = data_range
+        self.data_inds = data_inds
         
         self.transform = transform
         self.augmentation = augmentation
-        self.OneHot = t_utils.AssignOneHotLabels(label_values=data_labels)
 
+        if data_labels is not None:
+            self.OneHot = t_utils.AssignOneHotLabels(label_values=data_labels)
+        else:
+            self.OneHot = None
+            
         if image_label_list is not None:
             if not os.path.isfile(image_label_list):
                 raise ValueError(f'File {image_label_list} does not exist')
 
             # Read the image and label paths from the file
             df = pd.read_csv(image_label_list, header=None)
-            self.image_files = df.iloc[data_range, :-1].values.tolist()
-            self.label_files = df.iloc[data_range, -1].values.tolist()
+            self.image_files = df.iloc[data_inds, :-1].values.tolist()
+            self.label_files = df.iloc[data_inds, -1].values.tolist()
 
         elif data_dir is not None:
             data_dir = Path(data_dir)
@@ -91,7 +96,7 @@ class PituitaryPinealDataset(Dataset):
 
         #log success
         num_pairs = len(self.image_files)
-        logging.info(f'Data loaded successfully with {num_pairs} image/label pairs')
+        #logging.info(f'Data loaded successfully with {num_pairs} image/label pairs')
 
         if save_image_label_list:
             if not image_label_list and save_image_label_list:
@@ -108,25 +113,19 @@ class PituitaryPinealDataset(Dataset):
     def __len__(self):
         return len(self.image_files)
     
-    def _load_image(self, path):
+    def _load_volume(self, path):
         data = nib.funcs.as_closest_canonical(nib.load(path))
         image = data.get_fdata().astype(np.float32)
         return image
-
-    def _load_label(self, path):
-        data = nib.funcs.as_closest_canonical(nib.load(path))
-        label = data.get_fdata().astype(np.int32)
-        return label
 
     
     def __getitem__(self, idx):
         img_paths = self.image_files[idx]
         label_path = self.label_files[idx]
         
-        images = [self._load_image(Path(img_path)) for img_path in img_paths]
-        label = self._load_label(Path(label_path))
+        images = [self._load_volume(Path(img_path)) for img_path in img_paths]
+        label = self._load_volume(Path(label_path))
 
-        
         # Initial transform
         if self.transform is not None:
             label = self.transform(label)
@@ -134,22 +133,21 @@ class PituitaryPinealDataset(Dataset):
 
         images = torch.stack(images, dim=0)
         label = torch.from_numpy(np.expand_dims(label, axis=0))
-
         
         # Data augmentation
         if self.augmentation is not None:
             images, label = self.augmentation(images, label)
 
-        label = self.OneHot(label)
+        if self.OneHot is not None:
+            label = self.OneHot(label)
         
         return images, label
 
 
 
-def call_dataset(data_config_csv:str):
-    data_config = data_config_csv
+def call_dataset(data_config:str):
+    # General set up
     data_labels = (0, 883, 900, 903, 904)
-    
     transform = transforms.ToTensor()
     augmentation = t_utils.Compose([t_utils.RandomElasticAffineCrop(),
                                     t_utils.RandomLRFlip(),
@@ -158,28 +156,38 @@ def call_dataset(data_config_csv:str):
                                     t_utils.GaussianNoise(),
                                     t_utils.MinMaxNorm()
     ])
+
+    # Get subject indices for train/valid/test
+    with open(data_config, 'r') as f:
+        lines = f.readlines()
+
+    n_subjects = len(lines)
+    x = int(0.2*n_subjects)
     
-    train_range = range(0,36)
-    valid_range = range(36,50)
-    test_range = range(50,64)
+    all_inds = list(range(0,n_subjects))
+    random.shuffle(all_inds)
+    test_inds = all_inds[:x]
+    valid_inds = all_inds[x:2*x]
+    train_inds = all_inds[2*x:]
+    
 
-    train = PituitaryPinealDataset(data_range = train_range,
+    # Get each cohort
+    train = PituitaryPinealDataset(data_inds=train_inds,
                                    image_label_list=data_config,
                                    transform=transform,
                                    augmentation=augmentation,
                                    data_labels=data_labels,
     )
-    valid = PituitaryPinealDataset(data_range = valid_range,
+    valid = PituitaryPinealDataset(data_inds=valid_inds,
                                    image_label_list=data_config,
                                    transform=transform,
                                    augmentation=augmentation,
                                    data_labels=data_labels,
     )
-    test = PituitaryPinealDataset(data_range = test_range,
+    test = PituitaryPinealDataset(data_inds=test_inds,
                                    image_label_list=data_config,
                                    transform=transform,
                                    augmentation=augmentation,
                                    data_labels=data_labels,
     )
-
     return train, valid, test, len(data_labels)

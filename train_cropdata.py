@@ -22,16 +22,23 @@ import freesurfer as fs
 
 
 ### Data visualization tool
-def call_freeview(img, onehot):
+def call_freeview(img, onehot, onehot_pred=None):
+  fv = fs.Freeview()
+  
   volume = img[0,0,:]
+  fv.vol(volume)
+  
   seg = torch.zeros(volume.shape)
-
   for i in range(onehot.shape[1]):
     seg += i * onehot[0,i,:]
-      
-  fv = fs.Freeview()
-  fv.vol(volume)
   fv.vol(seg, colormap='lut')
+    
+  if onehot_pred is not None:
+    seg_pred = torch.zeros(volume.shape)
+    for i in range(onehot_pred.shape[1]):
+      seg_pred += i * onehot_pred[0,i,:]
+    fv.vol(seg_pred, colormap='lut')
+
   fv.show()
 
 
@@ -52,10 +59,12 @@ def training_loop(dataloader, model, loss_fn, optimizer):
 
     loss.backward()
     optimizer.step()
-
+    #breakpoint()
+  
   print(f'Training loss: {loss.item():>.4f}')
 
 
+  
 def validation_loop(dataloader, model, loss_fn):
   size = len(dataloader.dataset)
   num_batches = len(dataloader)
@@ -78,6 +87,24 @@ def validation_loop(dataloader, model, loss_fn):
 
 
 
+def testing_loop(dataloader, model, loss_fn):
+  test_ind = 0
+  test_loss, correct = 0, 0
+  for X, y in dataloader:
+    X, y = X.to(device), y.to(device)
+
+    with torch.no_grad():
+      y_pred = model(X)
+      test_loss += loss_fn(y_pred, y)
+      correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()/y.numel()
+
+      #call_freeview(X.cpu().numpy(), y.cpu().numpy(), y_pred.cpu().numpy())
+
+  test_loss /= len(test_loader)
+  print(f'Loss: {test_loss:>.4f}')
+
+
+  
 
 ### Set up ###
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
@@ -95,12 +122,14 @@ model = UNet3D(in_channels=1,
                n_features_start=24,
                n_blocks=3, 
                n_convs_per_block=2, 
-               activation_type="ReLU",
+               activation_type="ELU",
                pooling_type="MaxPool3d",
 ).to(device)
 optimizer = torch.optim.Adam(model.parameters())
 loss_fn = nn.BCEWithLogitsLoss()
 
+aff = np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]])
+header = nib.Nifti1Header()
 
 
 ### Run the model ###
@@ -109,16 +138,6 @@ for epoch in range(n_epochs):
   print(f"\nEpoch [{epoch+1}/{n_epochs}]\n-------------------")
   training_loop(train_loader, model, loss_fn, optimizer)
   validation_loop(valid_loader, model, loss_fn)
-  
-print('Testing...\n-------------------')
-test_loss, correct = 0, 0
-for X, y in test_loader:
-    X, y = X.to(device), y.to(device)
 
-    with torch.no_grad():
-      y_pred = model(X)
-      test_loss += loss_fn(y_pred, y)
-      correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()/y.numel()
-
-test_loss /= len(test_loader)
-print(f'Loss: {test_loss:>.4f}')
+print('\n\nTesting...\n-------------------')
+testing_loop(test_loader, model, loss_fn)

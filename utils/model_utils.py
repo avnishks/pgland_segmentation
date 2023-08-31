@@ -63,10 +63,11 @@ class UNet3D(nn.Module):
 
         for b in range(0, n_blocks):
             if b == n_blocks - 1:
-                block = nn.Conv3d(n_input_features,
-                                  out_channels,
-                                  kernel_size=1
-                )
+                block = nn.Sequential(nn.Conv3d(n_input_features,
+                                                out_channels,
+                                                kernel_size=1),
+                                      nn.Softmax(dim=1))
+
             else:
                 block = _UNet3D_UpBlock(in_channels=n_input_features,
                                         out_channels=n_output_features,
@@ -90,6 +91,7 @@ class UNet3D(nn.Module):
         for b in range(0, self.n_blocks):
             #print("Down", b+1)
             #print("input:", encoding[b].shape)
+            #print(self.blocks.__getattr__('down%d' % (b+1)))
             if b != self.n_blocks - 1:
                 encoding[b+1], skips[b] = self.blocks.__getattr__('down%d' % (b+1))(encoding[b])
             else:
@@ -101,6 +103,7 @@ class UNet3D(nn.Module):
         decoding[0] = encoding[-1]
         for b in range(0, self.n_blocks):
             #print("Up", b+1)
+            #print(self.blocks.__getattr__('up%d' % (b+1)))
             #print("input:", decoding[b].shape)
             if b != self.n_blocks - 1:
                 skip_ind = self.n_blocks - b - 2
@@ -110,7 +113,8 @@ class UNet3D(nn.Module):
                 decoding[b+1] = self.blocks.__getattr__('up%d' % (b+1))(decoding[b])
             #print("output:", decoding[b+1].shape)
             #print(" ")
-            
+
+        #breakpoint()
         return decoding[-1]
                 
 
@@ -185,13 +189,6 @@ class _UNet3D_UpBlock(nn.Module):
                                                          padding=1),
                                       getattr(nn, activation_type)(inplace=True)
                 )
-            elif n == n_convs_per_block - 1:
-                layer = nn.Sequential(nn.ConvTranspose3d(in_channels=out_channels,
-                                                         out_channels=out_channels,
-                                                         kernel_size=3,
-                                                         padding=1),
-                                      nn.Softmax(dim=0)
-                )
             else:
                 layer = nn.Sequential(nn.ConvTranspose3d(in_channels=out_channels,
                                                          out_channels=out_channels,
@@ -205,9 +202,8 @@ class _UNet3D_UpBlock(nn.Module):
     def forward(self, x, skip):
         x = self.up(x)
         x = torch.cat([x, skip], dim=1)
-
+        
         for n in range(0, self.n_convs):
             x = self.conv_block.__getattr__('convlayer%d' % (n+1))(x)
-        
+            
         return x
-
