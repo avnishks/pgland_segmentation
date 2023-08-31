@@ -113,9 +113,15 @@ class PituitaryPinealDataset(Dataset):
     def __len__(self):
         return len(self.image_files)
     
-    def _load_volume(self, path):
+    def _load_image(self, path):
         data = nib.funcs.as_closest_canonical(nib.load(path))
         image = data.get_fdata().astype(np.float32)
+        return image
+
+
+    def _load_label(self, path):
+        data = nib.funcs.as_closest_canonical(nib.load(path))
+        image = data.get_fdata().astype(np.int32)
         return image
 
     
@@ -123,8 +129,8 @@ class PituitaryPinealDataset(Dataset):
         img_paths = self.image_files[idx]
         label_path = self.label_files[idx]
         
-        images = [self._load_volume(Path(img_path)) for img_path in img_paths]
-        label = self._load_volume(Path(label_path))
+        images = [self._load_image(Path(img_path)) for img_path in img_paths]
+        label = self._load_label(Path(label_path))
 
         # Initial transform
         if self.transform is not None:
