@@ -103,8 +103,8 @@ class UNet3D(nn.Module):
         decoding[0] = encoding[-1]
         for b in range(0, self.n_blocks):
             #print("Up", b+1)
-            #print(self.blocks.__getattr__('up%d' % (b+1)))
             #print("input:", decoding[b].shape)
+            #print(self.blocks.__getattr__('up%d' % (b+1)))
             if b != self.n_blocks - 1:
                 skip_ind = self.n_blocks - b - 2
                 #print("skip:", skips[skip_ind].shape)
@@ -113,7 +113,7 @@ class UNet3D(nn.Module):
                 decoding[b+1] = self.blocks.__getattr__('up%d' % (b+1))(decoding[b])
             #print("output:", decoding[b+1].shape)
             #print(" ")
-
+            
         #breakpoint()
         return decoding[-1]
                 
@@ -134,26 +134,22 @@ class _UNet3D_DownBlock(nn.Module):
         self.pool = pool
         
         # Define components
-        self.pooling = getattr(nn, pooling_type)(kernel_size=2, stride=2)
         self.conv_block = nn.Sequential()
-
         for n in range(0, n_convs_per_block):
             if n == 0:
-                layer = nn.Sequential(nn.Conv3d(in_channels,
-                                                out_channels,
-                                                kernel_size=3,
-                                                padding=1),
-                                      getattr(nn, activation_type)(inplace=True)
-                )
+                conv = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
             else:
-                layer = nn.Sequential(nn.Conv3d(out_channels,
-                                                out_channels,
-                                                kernel_size=3,
-                                                padding=1),\
-                                      getattr(nn, activation_type)(inplace=True)
-                )
+                conv = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
+
+            layer = nn.Sequential(conv,
+                                  nn.BatchNorm3d(out_channels),
+                                  getattr(nn, activation_type)(inplace=True)
+            )
             self.conv_block.add_module('convlayer%d' % (n+1), layer)
 
+        if self.pool:
+            self.pooling = getattr(nn, pooling_type)(kernel_size=2, stride=2)
+            
 
     def forward(self, x):
         for n in range(0, self.n_convs):
@@ -179,23 +175,18 @@ class _UNet3D_UpBlock(nn.Module):
         
         # Define components
         self.up = nn.ConvTranspose3d(in_channels, out_channels, kernel_size=2, stride=2)
+
         self.conv_block = nn.Sequential()
-        
         for n in range(0,n_convs_per_block):    
             if n == 0:
-                layer = nn.Sequential(nn.ConvTranspose3d(in_channels=in_channels,
-                                                         out_channels=out_channels,
-                                                         kernel_size=3,
-                                                         padding=1),
-                                      getattr(nn, activation_type)(inplace=True)
-                )
+                conv = nn.Conv3d(in_channels, out_channels, kernel_size=3, padding=1)
             else:
-                layer = nn.Sequential(nn.ConvTranspose3d(in_channels=out_channels,
-                                                         out_channels=out_channels,
-                                                         kernel_size=3,
-                                                         padding=1),
-                                      getattr(nn, activation_type)(inplace=True)
-                )
+                conv = nn.Conv3d(out_channels, out_channels, kernel_size=3, padding=1)
+
+            layer = nn.Sequential(conv,
+                                  nn.BatchNorm3d(out_channels),
+                                  getattr(nn, activation_type)(inplace=True)
+            )
             self.conv_block.add_module('convlayer%d' % (n+1), layer)
         
 
