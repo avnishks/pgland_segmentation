@@ -23,11 +23,35 @@ class Compose(transforms.Compose):
                 args = t(*args)
         if gpu:
             for t in self.transforms[self.gpuindex:]:
-                #breakpoint()
                 args = t(*args)
 
         return args
 
+
+class GetPatch:
+    def __init__(self, patch_size:[int, list]):
+        n_dims = 3
+        self.patch_size = [patch_size] * n_dims if isinstance(patch_size, int) else patch_size
+
+    def __call__(self, img, seg):
+        h0, w0, d0 = img.shape[-3:]
+        h1, w1, d1 = self.patch_size
+        
+        if len(img.shape) > 3:
+            img = img[... , (h0-h1)//2:h0-(h0-h1)//2, (w0-w1)//2:w0-(w0-w1)//2, (d0-d1)//2:d0-(d0-d1)//2]
+        else:
+            img = img[(h0-h1)//2:h0-(h0-h1)//2, (w0-w1)//2:w0-(w0-w1)//2, (d0-d1)//2:d0-(d0-d1)//2]
+
+        
+        if len(seg.shape) > 3:
+            seg = seg[... , (h0-h1)//2:h0-(h0-h1)//2, (w0-w1)//2:w0-(w0-w1)//2, (d0-d1)//2:d0-(d0-d1)//2]
+        else:
+            seg = seg[(h0-h1)//2:h0-(h0-h1)//2, (w0-w1)//2:w0-(w0-w1)//2, (d0-d1)//2:d0-(d0-d1)//2]
+
+        return img, seg
+
+        
+        
 
 
 
@@ -40,15 +64,15 @@ class RandomElasticAffineCrop:
                  max_elastic_displacement:[float,list]=0.15,
                  n_elastic_control_pts:int=5,
                  n_elastic_steps:int=0,
-                 patch_size:[int,list]=None,
-                 **kwargs):
-
+                 patch_size:list=None,
+                 **kwargs
+    ):
         n_dims = 3
         if isinstance(translation_bounds, list): assert len(translation_bounds) == n_dims
         if isinstance(rotation_bounds, list): assert len(rotation_bounds) == n_dims
         if isinstance(shear_bounds, list): assert len(shear_bounds) == n_dims
         if isinstance(scale_bounds, list): assert len(scale_bounds) == n_dims
-        if isinstance(patch_size, list): assert len() == n_dims
+        if isinstance(patch_size, list): assert len(patch_size) == n_dims
 
         self.spatial = cc.RandomAffineElasticTransform(translations=translation_bounds,
                                                        rotations=rotation_bounds,
@@ -83,14 +107,14 @@ class MinMaxNorm:
         self.minim = minim
         self.maxim = maxim
 
-    def __call__(self, img):
+    def __call__(self, img, seg):
         i_min = self.minim
         i_max = self.maxim
         o_min = torch.min(img)
         o_max = torch.max(img)
         
         img = (o_max - o_min) * (img - i_min) / (i_max - i_min) + o_min
-        return img
+        return img, seg
 
                
 
@@ -105,9 +129,9 @@ class ContrastAugmentation:
                                                  #vmin=v_range[0],
                                                  #vmax=v_range[1])
 
-    def __call__(self, img):
+    def __call__(self, img, seg):
         img = self.gammacorr(img)
-        return img
+        return img, seg
 
         
 class BiasField:
@@ -124,9 +148,9 @@ class BiasField:
                                                     order=order,
                                                     shared=False)
 
-    def __call__(self, img):
+    def __call__(self, img, seg):
         img = self.biasfield(img)
-        return img
+        return img, seg
 
     
 
@@ -135,8 +159,8 @@ class GaussianNoise:
         self.sigma = sigma
         self.noise = cc.RandomGaussianNoiseTransform(sigma=sigma)
 
-    def __call__(self, img):
-        img = self.noise(img)
+    def __call__(self, img, seg):
+        img = self.noise(img, seg)
         return img
 
 

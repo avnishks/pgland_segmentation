@@ -31,7 +31,7 @@ class UNet3D(nn.Module):
         self.encoding = nn.Sequential()
         encoding_config = [in_channels] + self.block_config
         
-        for b in range(0, len(encoding_config) - 1):
+        for b in range(0, len(encoding_config)-1):
             block = _UNet3D_Block(n_input_features=encoding_config[b],
                                   n_output_features=encoding_config[b+1],
                                   n_layers=n_convs_per_block,
@@ -46,7 +46,8 @@ class UNet3D(nn.Module):
                                              return_indices=True
             )
             self.encoding.add_module('Pool%d' % (b+1), pool)
-                
+
+            
         #Decoding blocks:
         self.decoding = nn.Sequential()
         decoding_config = [out_channels] + self.block_config
@@ -65,14 +66,14 @@ class UNet3D(nn.Module):
             self.decoding.add_module('ConvBlock%d' % (b+1), block)
             
         
-        last = nn.Sequential(nn.ConvTranspose3d(decoding_config[0], 
+        last = nn.Sequential(nn.ConvTranspose3d(decoding_config[1], 
                                                 out_channels=out_channels,
                                                 kernel_size=1,
                                                 stride=1),
                              nn.Softmax(dim=1)
         )
-        self.decoding.add_module('LastStep', nn.Softmax(dim=1))
-        #self.decoding.add_module('LastConv', last)
+        #self.decoding.add_module('LastStep', nn.Softmax(dim=1))
+        self.decoding.add_module('LastConv', last)
         
 
 
@@ -94,24 +95,26 @@ class UNet3D(nn.Module):
             x = enc[b] = self.encoding.__getattr__('ConvBlock%d' % (b+1))(x)
             if printout:  print(self.encoding.__getattr__('ConvBlock%d' % (b+1)))
             siz[b] = x.shape
-            #if b != self.n_blocks - 1:
-            x, idx[b] =  self.encoding.__getattr__('Pool%d' % (b+1))(x)
-            if printout:  print(self.encoding.__getattr__('Pool%d' % (b+1)))
-            if printout:  print(' ')
-                
+            if b != self.n_blocks - 1:
+                x, idx[b] =  self.encoding.__getattr__('Pool%d' % (b+1))(x)
+                if printout:  print(self.encoding.__getattr__('Pool%d' % (b+1)))
+                if printout:  print(' ')
+            
         # Decoding
         for b in reversed(range(0, self.n_blocks)):
             if printout:  print('---------')
             if printout:  print('Decoding block %d' % (b+1))
             if printout:  print('---------')
-            #if b != self.n_blocks - 1:
-            x = self.decoding.__getattr__('Upsample%d' % (b+1))(x, idx[b], output_size=siz[b])
-            if printout:  print(self.decoding.__getattr__('Upsample%d' % (b+1)))
+            if b != self.n_blocks - 1:
+                x = self.decoding.__getattr__('Upsample%d' % (b+1))(x, idx[b], output_size=siz[b])
+                if printout:  print(self.decoding.__getattr__('Upsample%d' % (b+1)))
             x = dec[b] = self.decoding.__getattr__('ConvBlock%d' % (b+1))(torch.cat([x, enc[b]], 1))
             if printout:  print('w/ skip', self.decoding.__getattr__('ConvBlock%d' % (b+1)))
             if printout:  print(' ')
             
-        x = self.decoding.LastStep(x)
+        #x = self.decoding.LastConv(x)
+        #if printout:  print(self.decoding.LastConv)
+        if printout:  breakpoint()
         return x
 
             
@@ -226,7 +229,7 @@ class _UNet3D_BlockTranspose(nn.ModuleDict):
             self.add_module('ConvLayer%d' % (i + 1), layer)
 
         layer = _UNet3D_LayerTranspose(n_input_features=n_input_features,
-                                       n_output_features=n_output_features,
+                                       n_output_features=n_output_features, # if level > 0 else n_input_features,
                                        activation_type=activation_type,
                                        norm=norm,
                                        drop=drop,

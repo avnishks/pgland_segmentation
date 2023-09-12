@@ -157,14 +157,17 @@ def call_dataset(data_config:str):
     # General set up
     data_labels = (0, 883, 900, 903, 904)
     transform = transforms.ToTensor()
-    augmentation = t_utils.Compose([t_utils.RandomElasticAffineCrop(),
+    augmentation = t_utils.Compose([t_utils.GetPatch(patch_size=80),
+                                    t_utils.RandomElasticAffineCrop(),
                                     t_utils.RandomLRFlip(),
                                     t_utils.ContrastAugmentation(),
                                     t_utils.BiasField(),
                                     t_utils.GaussianNoise(),
                                     t_utils.MinMaxNorm()
     ])
-
+    augmentation = t_utils.GetPatch(patch_size=80)
+    
+    
     # Get subject indices for train/valid/test
     with open(data_config, 'r') as f:
         lines = f.readlines()
