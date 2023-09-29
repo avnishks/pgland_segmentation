@@ -1,5 +1,6 @@
 import sys
 import numpy as np
+from numpy import random as npr
 import math
 import random
 
@@ -9,7 +10,7 @@ import torchvision.transforms as transforms
 import torchvision.transforms.functional as F
 
 import cornucopia as cc #https://github.com/balbasty/cornucopia/tree/feat-psf-slicewise
-
+from cornucopia import random as cc_rand
 
 
 class Compose(transforms.Compose):
@@ -28,30 +29,31 @@ class Compose(transforms.Compose):
         return args
 
 
+
 class GetPatch:
-    def __init__(self, patch_size:[int, list]):
-        n_dims = 3
+    def __init__(self, patch_size:[int, list], n_dims:int):
+        self.X = n_dims
         self.patch_size = [patch_size] * n_dims if isinstance(patch_size, int) else patch_size
 
-    def __call__(self, img, seg):
-        h0, w0, d0 = img.shape[-3:]
-        h1, w1, d1 = self.patch_size
-        
-        if len(img.shape) > 3:
-            img = img[... , (h0-h1)//2:h0-(h0-h1)//2, (w0-w1)//2:w0-(w0-w1)//2, (d0-d1)//2:d0-(d0-d1)//2]
-        else:
-            img = img[(h0-h1)//2:h0-(h0-h1)//2, (w0-w1)//2:w0-(w0-w1)//2, (d0-d1)//2:d0-(d0-d1)//2]
 
-        
-        if len(seg.shape) > 3:
-            seg = seg[... , (h0-h1)//2:h0-(h0-h1)//2, (w0-w1)//2:w0-(w0-w1)//2, (d0-d1)//2:d0-(d0-d1)//2]
+    def _get_patch(self, vol):
+        if self.X == 2:
+            h0, w0 = vol.shape[-2:]
+            h1, w1 = self.patch_size
+            return vol[..., (h0-h1)//2:h0-(h0-h1)//2, (w0-w1)//2:w0-(w0-w1)//2]
+        elif self.X >= 3:
+            h0, w0, d0 = vol.shape[-3:]
+            h1, w1, d1 = self.patch_size
+            return vol[..., (h0-h1)//2:h0-(h0-h1)//2, (w0-w1)//2:w0-(w0-w1)//2, (d0-d1)//2:d0-(d0-d1)//2]
         else:
-            seg = seg[(h0-h1)//2:h0-(h0-h1)//2, (w0-w1)//2:w0-(w0-w1)//2, (d0-d1)//2:d0-(d0-d1)//2]
+            print('Invalid n_dims')
+            
+        
+    def __call__(self, img, seg):
+        img = self._get_patch(img)
+        seg = self._get_patch(seg)
 
         return img, seg
-
-        
-        
 
 
 
@@ -64,27 +66,45 @@ class RandomElasticAffineCrop:
                  max_elastic_displacement:[float,list]=0.15,
                  n_elastic_control_pts:int=5,
                  n_elastic_steps:int=0,
+                 order:int=3,
                  patch_size:list=None,
+                 n_dims:int=3,
                  **kwargs
     ):
-        n_dims = 3
+        X = n_dims
         if isinstance(translation_bounds, list): assert len(translation_bounds) == n_dims
         if isinstance(rotation_bounds, list): assert len(rotation_bounds) == n_dims
         if isinstance(shear_bounds, list): assert len(shear_bounds) == n_dims
         if isinstance(scale_bounds, list): assert len(scale_bounds) == n_dims
         if isinstance(patch_size, list): assert len(patch_size) == n_dims
 
-        self.spatial = cc.RandomAffineElasticTransform(translations=translation_bounds,
-                                                       rotations=rotation_bounds,
-                                                       shears=shear_bounds,
-                                                       zooms=scale_bounds,
-                                                       dmax=max_elastic_displacement,
-                                                       shape=n_elastic_control_pts,
-                                                       steps=n_elastic_steps,
-                                                       patch=patch_size)
+        self.translations = [translation_bounds] * X \
+            if isinstance(translation_bounds, float) else translation_bounds
+        self.rotations = [rotation_bounds] * X \
+            if isinstance(rotation_bounds, float) else rotation_bounds
+        self.shears = [shear_bounds]  * X \
+            if isinstance(shear_bounds, float) else shear_bounds
+        self.zooms = [scale_bounds]  * X \
+            if isinstance(scale_bounds, float) else scale_bounds
+        self.dmax = [max_elastic_displacement] * X \
+            if isinstance(max_elastic_displacement, float) else max_elastic_displacement
+        self.shape = n_elastic_control_pts
+        self.steps = n_elastic_steps
+        self.patch = patch_size
+        
+        self.transform = cc.RandomAffineElasticTransform(translations=self.translations,
+                                                         rotations=self.rotations,
+                                                         shears=self.shears,
+                                                         zooms=self.zooms,
+                                                         dmax=self.dmax,
+                                                         shape=self.shape,
+                                                         steps=self.steps,
+                                                         patch=self.patch
+        )
+        
         
     def __call__(self, img, seg):
-        img, seg = self.spatial(img, seg)
+        img, seg = self.transform(img, seg)
         return img, seg
 
 
@@ -93,17 +113,18 @@ class RandomLRFlip:
     def __init__(self, chance:float=0.5):
         self.chance = chance if chance >= 0 and chance <= 1 \
             else Exception("Invalid chance (must be float between 0 and 1)")
+        self.transform = cc.FlipTransform(axis=0)
 
-        self.flip = cc.FlipTransform(axis=0)
 
     def __call__(self, img, seg):
-        img, seg = cc.MaybeTransform(self.flip, self.chance)(img, seg)
+        img, seg = cc.MaybeTransform(self.transform, self.chance)(img, seg)
         return img, seg
+        
     
 
 
 class MinMaxNorm:
-    def __init__(self, minim:float=0, maxim:float=1, **kwargs):
+    def __init__(self, minim:float=0, maxim:float=1):
         self.minim = minim
         self.maxim = maxim
 
@@ -119,21 +140,19 @@ class MinMaxNorm:
                
 
 class ContrastAugmentation:
-    def __init__(self, gamma_range:list=(0.5, 2), v_range:list=(None, None), **kwargs):
+    def __init__(self, gamma_range:list=(0.5, 2)):
         self.gamma_range = gamma_range if len(gamma_range)==2 \
             else Exception("Invalid gamma_range (must be (min max))")
-        self.v_range = v_range if len(v_range)==2 \
-            else Exception("Invalid v_range (must be (min max))")
 
-        self.gammacorr = cc.RandomGammaTransform(gamma=gamma_range)
-                                                 #vmin=v_range[0],
-                                                 #vmax=v_range[1])
+        self.transform = cc.RandomGammaTransform(gamma=gamma_range)
 
+    
     def __call__(self, img, seg):
-        img = self.gammacorr(img)
+        img = self.transform(img)
         return img, seg
 
-        
+
+    
 class BiasField:
     def __init__(self, shape:int=8, v_max:list=1, order:int=3):
         self.shape = shape if isinstance(shape, int)\
@@ -143,13 +162,13 @@ class BiasField:
         self.order = order if isinstance(order, int)\
             else Exception("Invalid order (must be int)")
         
-        self.biasfield = cc.RandomMulFieldTransform(shape=shape,
+        self.transform = cc.RandomMulFieldTransform(shape=shape,
                                                     vmax=v_max,
                                                     order=order,
                                                     shared=False)
 
     def __call__(self, img, seg):
-        img = self.biasfield(img)
+        img = self.transform(img)
         return img, seg
 
     
@@ -157,29 +176,35 @@ class BiasField:
 class GaussianNoise:
     def __init__(self, sigma:float=0.1):
         self.sigma = sigma
-        self.noise = cc.RandomGaussianNoiseTransform(sigma=sigma)
+        self.transform = cc.RandomGaussianNoiseTransform(sigma=sigma)
 
     def __call__(self, img, seg):
-        img = self.noise(img, seg)
-        return img
-
+        img = self.transform(img)
+        return img, seg
 
 
 
 class AssignOneHotLabels():
-    def __init__(self, label_values=None, index=0):
+    def __init__(self, label_values:list=None, n_dims:int=3, index=0):
         self.label_values = label_values
+        self.n_dims = n_dims
         self.index = index
 
-    def __call__(self, seg):
+        
+    def __call__(self, img, seg):
         if self.label_values == None:
             self.label_values = torch.unique(torch.flatten(seg))
 
         onehot = torch.zeros(seg.shape)
-        onehot = onehot.repeat(len(self.label_values),1,1,1)
+        if self.n_dims == 4:
+            onehot = onehot.repeat(len(self.label_values),1,1,1,1)
+        elif self.n_dims == 3:
+            onehot = onehot.repeat(len(self.label_values),1,1,1)
+        elif self.n_dims == 2:
+            onehot = onehot.repeat(len(self.label_values),1,1)
         seg = torch.squeeze(seg)
         
         for i in range(0, len(self.label_values)):
             onehot[i,:] = seg==self.label_values[i]
-
-        return onehot.type(torch.float32)
+            
+        return img, onehot.type(torch.float32)

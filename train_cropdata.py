@@ -1,143 +1,93 @@
-import logging
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
-
-from utils.data_utils import call_dataset
-
-from utils.model_utils import UNet3D
-from utils import transform_utils as t_utils
-import losses
-
-from torchvision import transforms
-from torchsummary import summary
-from torch.cuda.amp import autocast
-
-import pandas as pd
+import os
+import warnings
 import numpy as np
 import nibabel as nib
 import freesurfer as fs
 
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
+
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint as pl_ModelCheckpoint
+from pytorch_lightning import loggers as pl_loggers
 
 
-### Data visualization tool
-def call_freeview(img, onehot, onehot_pred=None):
-  fv = fs.Freeview()
-  
-  volume = img[0,0,:]
-  fv.vol(volume)
-  
-  seg = torch.zeros(volume.shape)
-  for i in range(onehot.shape[1]):
-    seg += i * onehot[0,i,:]
-  fv.vol(seg, colormap='lut')
-    
-  if onehot_pred is not None:
-    seg_pred = torch.zeros(volume.shape)
-    for i in range(onehot_pred.shape[1]):
-      seg_pred += i * onehot_pred[0,i,:]
-    fv.vol(seg_pred, colormap='lut')
+from dataset.pituitarypineal_crop import call_dataset
+from dataset import transforms as t
 
-  fv.show()
+from model.segment import Segment as segment
+from model.unet import UNet3D
+import model.loss_functions as loss_fns
+from model.progress import ProgressBar as ProgressBar
+from model import losses
 
 
 
-### Define loops up here (clean up later) ###
-def training_loop(dataloader, model, loss_fn, optimizer):
-  size = len(dataloader.dataset)
-  num_batches = len(dataloader)
-  
-  model.train()
-  for X, y in dataloader:
-    optimizer.zero_grad()
-    
-    X, y = X.to(device), y.to(device)
-    with autocast():
-      y_pred = model(X)
-      loss = loss_fn(y_pred, y)
+### Torch set-up ###
+pl.seed_everything(0, workers=True) #####
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.deterministic = True
+torch.autograd.set_detect_anomaly(True)
 
-    loss.backward()
-    optimizer.step()
-    #breakpoint()
-  
-  print(f'Training loss: {loss.item():>.4f}')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+torch.set_float32_matmul_precision('medium')
+
+warnings.filterwarnings('ignore',
+                        "Your \\`val_dataloader\\`\\'s sampler has shuffling enabled, it is strongly recommended that you turn shuffling off for val/test/predict dataloaders.")
 
 
-  
-def validation_loop(dataloader, model, loss_fn):
-  size = len(dataloader.dataset)
-  num_batches = len(dataloader)
-  loss, correct = 0, 0
+### Data set-up ###
+#output_base = "no_augmentation"
+output_base = "augmentation_2"
+output_dir = os.path.join("data","results", output_base)
 
-  model.eval()
-  for X, y in dataloader:
-    X, y = X.to(device), y.to(device)
-    
-    with torch.no_grad():
-      y_pred = model(X)
-      loss += loss_fn(y_pred, y)
-      correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()/y.numel()
+data_config = "dataset/data_config.csv"
+augmentation_config = os.path.join(output_dir, "augmentation_parameters.txt") \
+    if output_base != "no_augmentation" else None
 
-  loss /= num_batches
-  correct /= size
+train_data, valid_data, test_data = call_dataset(data_config=data_config,
+                                                 augmentation_config=augmentation_config)
 
-  print(f'Validation loss: {loss:>.4f}')
-  #print(f'Accuracy: {(100*correct):>0.1f}%,  Validation loss: {loss:>.4f}') #(accuracy isn't correct..)
+train_loader = DataLoader(train_data, batch_size=1, shuffle=True, num_workers=8, pin_memory=True)
+valid_loader = DataLoader(valid_data, batch_size=1, shuffle=True, num_workers=8, pin_memory=True)
+test_loader = DataLoader(test_data, batch_size=1, shuffle=False, num_workers=8, pin_memory=True)
 
 
+### Model set-up ###
+lr_start = 0.0001
+lr_param = 0.9
+momentum = 0.9
+decay = 0.0000
 
-def testing_loop(dataloader, model, loss_fn):
-  test_ind = 0
-  test_loss, correct = 0, 0
-  for X, y in dataloader:
-    X, y = X.to(device), y.to(device)
+model = UNet3D(in_channels=1, out_channels=train_data.__numclass__()).to(device)
+optimizer = torch.optim.Adam(model.parameters(), lr=lr_start, weight_decay=decay)
+loss = loss_fns.dice_cce_loss
+metrics=[losses.MeanDice()]
 
-    with torch.no_grad():
-      y_pred = model(X)
-      test_loss += loss_fn(y_pred, y)
-      correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()/y.numel()
-
-      #call_freeview(X.cpu().numpy(), y.cpu().numpy(), y_pred.cpu().numpy())
-
-  test_loss /= len(test_loader)
-  print(f'Loss: {test_loss:>.4f}')
-
-
-  
-
-### Set up ###
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
-logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
-
-data_config = 'data_config_crop.csv'
-train_data, valid_data, test_data, n_labels = call_dataset(data_config)
-
-train_loader = DataLoader(train_data, batch_size=1, shuffle=True)
-valid_loader = DataLoader(valid_data, batch_size=1, shuffle=True)
-test_loader = DataLoader(test_data, batch_size=1, shuffle=True)
-
-model = UNet3D(in_channels=1, 
-               out_channels=n_labels,
-               n_features_start=24,
-               n_blocks=3, 
-               n_convs_per_block=2, 
-               activation_type="ELU",
-               pooling_type="MaxPool3d",
-).to(device)
-optimizer = torch.optim.Adam(model.parameters())
-loss_fn = nn.BCEWithLogitsLoss()
-
-aff = np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]])
-header = nib.Nifti1Header()
+trainee = segment(model=model, optimizer=optimizer, loss=loss, \
+                  train_data=train_data, valid_data=valid_data, test_data=test_data, output_folder=output_dir,
+                  seed=0, lr_start=0.1, lr_param=lr_param,
+                  train_metrics=metrics, valid_metrics=metrics, test_metrics=metrics,
+                  save_train_output_every=1, save_valid_output_every=0, schedule='poly',
+)
 
 
-### Run the model ###
-n_epochs = 10
-for epoch in range(n_epochs):
-  print(f"\nEpoch [{epoch+1}/{n_epochs}]\n-------------------")
-  training_loop(train_loader, model, loss_fn, optimizer)
-  validation_loop(valid_loader, model, loss_fn)
 
-print('\n\nTesting...\n-------------------')
-testing_loop(test_loader, model, loss_fn)
+### Run ? ###
+print("Train: %d | Valid: %d | Tests: %d" % \
+      (len(train_loader.dataset), len(valid_loader.dataset), len(test_loader.dataset)))
+
+callbacks = [pl_ModelCheckpoint(monitor='val_metric0', mode='max'),
+             ProgressBar(refresh_rate=1)]
+#logger = pl_loggers.TensorBoardLogger('logs/', name=output_base, default_hp_metric=False)
+
+trainer = pl.Trainer(accelerator='gpu', devices=1, max_epochs=10000,
+                     gradient_clip_val=0.5, gradient_clip_algorithm='value', precision=16)
+
+trainer.fit(trainee, train_loader, valid_loader)
+trainer.validate(trainee, valid_loader, verbose=False)
+trainer.test(trainee, test_loader, verbose=False)
+
+
+

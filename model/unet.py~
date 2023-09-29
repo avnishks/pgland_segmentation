@@ -4,27 +4,26 @@ import torch.nn.functional as F
 
 
 
-class UNet3D(nn.Module):
+class UNetXD(nn.Module):
     def __init__(self,
                  in_channels:int,
                  out_channels:int,
                  n_convs_per_block:int=2,
-                 block_config:tuple=(24, 48, 96, 192), #switch this back to my format later
+                 block_config:tuple=(24, 48, 96, 192),
                  activation_type:str='ReLU',
-                 pooling_type:str='MaxPool3d',
                  skip:bool=True,
+                 X:int=3,
                  **kwargs
     ):
-        super(UNet3D, self).__init__()
+        super(UNetXD, self).__init__()
 
+        #self.n_dims = X
         self.block_config = list(block_config)
         self.n_blocks = len(block_config)
         self.skip = skip
 
         self.activation_type = activation_type if callable(getattr(nn, activation_type)) \
             else Exception("Invalid activation_type (not an attribute of torch.nn")
-        self.pooling_type = pooling_type if callable(getattr(nn, pooling_type)) \
-            else Exception("Invalid pooling_type (not an attribute of torch.nn")
 
         
         # Encoding blocks:
@@ -32,16 +31,17 @@ class UNet3D(nn.Module):
         encoding_config = [in_channels] + self.block_config
         
         for b in range(0, len(encoding_config)-1):
-            block = _UNet3D_Block(n_input_features=encoding_config[b],
-                                  n_output_features=encoding_config[b+1],
-                                  n_layers=n_convs_per_block,
-                                  activation_type=activation_type,
-                                  level=b,
-                                  norm=True,
-                                  drop=0,
+            block = _UNetBlock(n_input_features=encoding_config[b],
+                               n_output_features=encoding_config[b+1],
+                               n_layers=n_convs_per_block,
+                               activation_type=activation_type,
+                               level=b,
+                               norm=True,
+                               drop=0,
+                               X=X,
             )
             self.encoding.add_module('ConvBlock%d' % (b+1), block)
-            pool = getattr(nn, pooling_type)(kernel_size=2,
+            pool = eval('nn.MaxPool%dd' % X)(kernel_size=2,
                                              stride=2,
                                              return_indices=True
             )
@@ -53,32 +53,22 @@ class UNet3D(nn.Module):
         decoding_config = [out_channels] + self.block_config
         
         for b in reversed(range(0, len(decoding_config) - 1)):
-            upsample = nn.MaxUnpool3d(kernel_size=2, stride=2)
+            upsample = eval('nn.MaxUnpool%dd' % X)(kernel_size=2, stride=2)
             self.decoding.add_module('Upsample%d' % (b+1), upsample)
-            block = _UNet3D_BlockTranspose(n_input_features=decoding_config[b+1],
-                                           n_output_features=decoding_config[b],
-                                           n_layers=n_convs_per_block,
-                                           activation_type=activation_type,
-                                           level=b,
-                                           norm=True,
-                                           drop=0,
+            
+            block = _UNetBlockTranspose(n_input_features=decoding_config[b+1],
+                                        n_output_features=decoding_config[b],
+                                        n_layers=n_convs_per_block,
+                                        activation_type=activation_type,
+                                        level=b,
+                                        norm=True,
+                                        drop=0,
+                                        X=X,
             )
             self.decoding.add_module('ConvBlock%d' % (b+1), block)
-            
-        
-        last = nn.Sequential(nn.ConvTranspose3d(decoding_config[1], 
-                                                out_channels=out_channels,
-                                                kernel_size=1,
-                                                stride=1),
-                             nn.Softmax(dim=1)
-        )
-        #self.decoding.add_module('LastStep', nn.Softmax(dim=1))
-        self.decoding.add_module('LastConv', last)
-        
-
+                    
 
     def forward(self, x):
-        # Initialize intermediate steps
         enc = [None] * (self.n_blocks) # encoding
         dec = [None] * (self.n_blocks) # decoding
         idx = [None] * (self.n_blocks) # maxpool indices
@@ -86,7 +76,6 @@ class UNet3D(nn.Module):
 
         printout = False
         
-        #breakpoint()
         # Encoding
         for b in range(0, self.n_blocks):
             if printout:  print('---------')
@@ -112,15 +101,14 @@ class UNet3D(nn.Module):
             if printout:  print('w/ skip', self.decoding.__getattr__('ConvBlock%d' % (b+1)))
             if printout:  print(' ')
             
-        #x = self.decoding.LastConv(x)
-        #if printout:  print(self.decoding.LastConv)
         if printout:  breakpoint()
         return x
 
             
         
-class _UNet3D_Layer(nn.Module):
+class _UNetLayer(nn.Module):
     def __init__(self,
+                 X:int,
                  n_input_features:int,
                  n_output_features:int,
                  activation_type:str,
@@ -129,21 +117,31 @@ class _UNet3D_Layer(nn.Module):
                  activ=True,
                  **kwargs
     ):
-        super(_UNet3D_Layer, self).__init__()
+        super(_UNetLayer, self).__init__()
 
-        self.add_module('norm', nn.BatchNorm3d(n_input_features) if norm else nn.Identity())
-        self.add_module('activ', nn.ELU(inplace=False) if activation_type is not None else nn.Identity())
-        self.add_module('conv', nn.Conv3d(n_input_features, n_output_features, kernel_size=3, padding=1,
-                                          bias=False if norm else True))
-        self.add_module('drop', nn.Dropout3d(drop) if drop > 0 else nn.Identity())
+        normXd = eval('nn.BatchNorm%dd' % X)(n_input_features)
+        activXd = nn.ELU(inplace=False)
+        convXd = eval('nn.Conv%dd' % X)(n_input_features,
+                                        n_output_features,
+                                        kernel_size=3,
+                                        padding=1,
+                                        bias=False if norm else True
+        )
+        dropXd = eval('nn.Dropout%dd' % X)
+        
+        self.add_module('norm', normXd if norm else nn.Identity())
+        self.add_module('activ', activXd if activation_type is not None else nn.Identity())
+        self.add_module('conv', convXd)
+        self.add_module('drop', dropXd if drop > 0 else nn.Identity())
 
     def forward(self, x):
         return self.drop(self.conv(self.activ(self.norm(x))))
 
 
     
-class _UNet3D_LayerTranspose(nn.Module):
+class _UNetLayerTranspose(nn.Module):
     def __init__(self,
+                 X:int,
                  n_input_features:int,
                  n_output_features:int,
                  activation_type:str,
@@ -151,22 +149,33 @@ class _UNet3D_LayerTranspose(nn.Module):
                  drop=0,
                  **kwargs
     ):
-        super(_UNet3D_LayerTranspose, self).__init__()
-        
-        self.add_module('drop', nn.Dropout3d(drop) if drop > 0 else nn.Identity())
-        self.add_module('norm', nn.BatchNorm3d(n_input_features) if norm else nn.Identity())
-        self.add_module('activ', nn.ELU(inplace=False) if activation_type is not None else nn.Identity())
-        self.add_module('conv', nn.ConvTranspose3d(n_input_features, n_output_features, kernel_size=3, padding=1,
-                                          bias=False if norm else True))
-        
+        super(_UNetLayerTranspose, self).__init__()
+
+        dropXd = eval('nn.Dropout%dd' % X)
+        normXd = eval('nn.BatchNorm%dd' % X)(n_input_features)
+        activXd = nn.ELU(inplace=False)
+        convXd = eval('nn.ConvTranspose%dd' % X)(n_input_features,
+                                                  n_output_features,
+                                                  kernel_size=3,
+                                                  padding=1,
+                                                  bias=False if norm else True
+        )
+
+        self.add_module('drop', dropXd if drop > 0 else nn.Identity())
+        self.add_module('norm', normXd if norm else nn.Identity())
+        self.add_module('activ', activXd if activation_type is not None else nn.Identity())
+        self.add_module('conv', convXd)
+
+
     def forward(self, x):
         return self.conv(self.activ(self.norm(self.drop(x))))
 
 
 
 
-class _UNet3D_Block(nn.ModuleDict):
+class _UNetBlock(nn.ModuleDict):
     def __init__(self,
+                 X:int,
                  n_input_features:int,
                  n_output_features:int,
                  n_layers:int,
@@ -177,23 +186,25 @@ class _UNet3D_Block(nn.ModuleDict):
                  skip=False,
                  **kwargs
     ):
-        super(_UNet3D_Block, self).__init__()
+        super(_UNetBlock, self).__init__()
 
-        layer = _UNet3D_Layer(n_input_features=n_input_features,
-                              n_output_features=n_output_features,
-                              activation_type=activation_type if level != 0 else None,
-                              norm=norm,
-                              drop=drop,
+        layer = _UNetLayer(n_input_features=n_input_features,
+                           n_output_features=n_output_features,
+                           activation_type=activation_type if level != 0 else None,
+                           norm=norm,
+                           drop=drop,
+                           X=X,
         )
         self.add_module('ConvLayer1', layer)
 
         for i in range(1, n_layers):
             growth = 1 + (skip and i == n_layers - 1)
-            layer = _UNet3D_Layer(n_input_features=n_output_features,
-                                  n_output_features=growth*n_output_features,
-                                  activation_type=activation_type,
-                                  norm=norm,
-                                  drop=drop,
+            layer = _UNetLayer(n_input_features=n_output_features,
+                               n_output_features=growth*n_output_features,
+                               activation_type=activation_type,
+                               norm=norm,
+                               drop=drop,
+                               X=X,
             )
             self.add_module('ConvLayer%d' % (i + 1), layer)
 
@@ -205,8 +216,9 @@ class _UNet3D_Block(nn.ModuleDict):
 
 
     
-class _UNet3D_BlockTranspose(nn.ModuleDict):
+class _UNetBlockTranspose(nn.ModuleDict):
     def __init__(self,
+                 X:int,
                  n_input_features:int,
                  n_output_features:int,
                  activation_type:str,
@@ -217,22 +229,24 @@ class _UNet3D_BlockTranspose(nn.ModuleDict):
                  skip=True,
                  **kwargs
     ):
-        super(_UNet3D_BlockTranspose, self).__init__()
+        super(_UNetBlockTranspose, self).__init__()
         for i in reversed(range(1,n_layers)):
             growth = 1 + (skip and i == n_layers - 1)
-            layer = _UNet3D_LayerTranspose(n_input_features=growth*n_input_features,
-                                           n_output_features=n_input_features,
-                                           activation_type=activation_type,
-                                           norm=norm,
-                                           drop=drop,
+            layer = _UNetLayerTranspose(n_input_features=growth*n_input_features,
+                                        n_output_features=n_input_features,
+                                        activation_type=activation_type,
+                                        norm=norm,
+                                        drop=drop,
+                                        X=X,
             )
             self.add_module('ConvLayer%d' % (i + 1), layer)
 
-        layer = _UNet3D_LayerTranspose(n_input_features=n_input_features,
-                                       n_output_features=n_output_features, # if level > 0 else n_input_features,
-                                       activation_type=activation_type,
-                                       norm=norm,
-                                       drop=drop,
+        layer = _UNetLayerTranspose(n_input_features=n_input_features,
+                                    n_output_features=n_output_features, # if level > 0 else n_input_features,
+                                    activation_type=activation_type,
+                                    norm=norm,
+                                    drop=drop,
+                                    X=X,
         )
         self.add_module('ConvLayer1', layer)
 
@@ -241,4 +255,18 @@ class _UNet3D_BlockTranspose(nn.ModuleDict):
         for name, layer in self.items():
             x = layer(x)
         return x
-        
+   
+
+
+class UNet3D(UNetXD):
+    def __init__(self, in_channels, out_channels, **kwargs):
+        super().__init__(in_channels=in_channels,
+                         out_channels=out_channels,
+                         n_convs_per_block=2,
+                         block_config=(24, 48, 96),
+                         activation_type='ELU',
+                         skip=True,
+                         X=3,
+                         **kwargs
+        )
+

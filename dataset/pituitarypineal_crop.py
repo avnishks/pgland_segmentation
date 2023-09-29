@@ -12,7 +12,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 import freesurfer as fs
 
-from . import transform_utils as t_utils
+from . import transforms as t
 
 
 
@@ -26,11 +26,12 @@ def call_freeview(img, seg):
 class PituitaryPinealDataset(Dataset):
     def __init__(self,
                  data_inds:list,
+                 n_class:int=1,
                  image_label_list=None,
                  data_dir=None,
                  transform=None,
                  augmentation=None,
-                 data_labels:list=None,
+                 output_aug_param_path:str=None,
                  save_image_label_list=False,
                  make_RAS=True,
                  **kwargs):
@@ -39,17 +40,14 @@ class PituitaryPinealDataset(Dataset):
             image_label_list (string): CSV file with paths of the images and labels.
             data_dir (string): Directory with the data. Should have subfolders for each modality and 'labels'.
         """
+        self.n_class = n_class
         self.data_inds = data_inds
         self.make_RAS = make_RAS
         
         self.transform = transform
         self.augmentation = augmentation
+        self.output_aug_param_path = output_aug_param_path
 
-        if data_labels is not None:
-            self.OneHot = t_utils.AssignOneHotLabels(label_values=data_labels)
-        else:
-            self.OneHot = None
-            
         if image_label_list is not None:
             if not os.path.isfile(image_label_list):
                 raise ValueError(f'File {image_label_list} does not exist')
@@ -98,7 +96,7 @@ class PituitaryPinealDataset(Dataset):
 
         #log success
         num_pairs = len(self.image_files)
-        #logging.info(f'Data loaded successfully with {num_pairs} image/label pairs')
+        logging.info(f'Data loaded successfully with {num_pairs} image/label pairs')
 
         if save_image_label_list:
             if not image_label_list and save_image_label_list:
@@ -115,6 +113,11 @@ class PituitaryPinealDataset(Dataset):
     def __len__(self):
         return len(self.image_files)
     
+
+    def __numclass__(self) -> int:
+        return self.n_class
+    
+    
     def _load_image(self, path):
         data = nib.funcs.as_closest_canonical(nib.load(path)) if self.make_RAS else nib.load(path)
         image = data.get_fdata().astype(np.float32)
@@ -123,82 +126,135 @@ class PituitaryPinealDataset(Dataset):
 
     def _load_label(self, path):
         data = nib.funcs.as_closest_canonical(nib.load(path)) if self.make_RAS else nib.load(path)
-        image = data.get_fdata().astype(np.float32)
+        image = data.get_fdata().astype(np.int32)
         return image
 
+
+    def _save_output(self, img, path, dtype, is_onehot:bool=False):
+        aff = np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]])
+        header = nib.Nifti1Header()
+        img = torch.argmax(img , dim=1)[0,:] if is_onehot else torch.squeeze(img)
+        nib.save(nib.Nifti1Image(img.cpu().numpy().astype(dtype), aff, header), path)
+    
     
     def __getitem__(self, idx):
         img_paths = self.image_files[idx]
         label_path = self.label_files[idx]
-        
+
         images = [self._load_image(Path(img_path)) for img_path in img_paths]
         label = self._load_label(Path(label_path))
 
-        # Initial transform
+        #label_basename = '.'.join(label_path.split('/')[-1].split('.')[0:2])
+
         if self.transform is not None:
             label = self.transform(label)
             images = [self.transform(image) for image in images]
 
         images = torch.stack(images, dim=0)
         label = torch.from_numpy(np.expand_dims(label, axis=0))
-        
-        # Data augmentation
+
         if self.augmentation is not None:
             images, label = self.augmentation(images, label)
 
-        if self.OneHot is not None:
-            label = self.OneHot(label)
-        
-        return images, label
+        return images, label, idx
 
 
 
-def call_dataset(data_config:str):
-    # General set up
-    data_labels = (0, 883, 900, 903, 904)
-    transform = transforms.ToTensor()
-    augmentation = t_utils.Compose([t_utils.GetPatch(patch_size=80),
-                                    t_utils.RandomElasticAffineCrop(),
-                                    t_utils.RandomLRFlip(),
-                                    t_utils.ContrastAugmentation(),
-                                    t_utils.BiasField(),
-                                    t_utils.GaussianNoise(),
-                                    t_utils.MinMaxNorm()
-    ])
-    augmentation = t_utils.GetPatch(patch_size=80)
+def augmentation_setup(augmentation_config:str=None, label_values=None, **kwargs):
+    X = 3
+    patch = t.GetPatch(patch_size=(70, 60, 80), n_dims=X)
+    flip = t.RandomLRFlip(chance=0.5)
+    norm = t.MinMaxNorm()
+    onehot = t.AssignOneHotLabels(label_values=label_values, n_dims=X)
     
+    if augmentation_config is not None:
+        df = pd.read_table(augmentation_config,
+                           delimiter='=',
+                           header=None,
+        )
+
+        translation_bounds = df.loc[df.iloc[:,0]=="translation_bounds",1].item()
+        rotation_bounds = df.loc[df.iloc[:,0]=="rotation_bounds",1].item()
+        shear_bounds = df.loc[df.iloc[:,0]=="shear_bounds",1].item()
+        scale_bounds = df.loc[df.iloc[:,0]=="scale_bounds",1].item()
+        max_elastic_displacement = df.loc[df.iloc[:,0]=="max_elastic_displacement",1].item()
+        n_elastic_control_pts = df.loc[df.iloc[:,0]=="n_elastic_control_pts",1].item()
+        n_elastic_steps = df.loc[df.iloc[:,0]=="n_elastic_steps",1].item()
+        gamma_lower = df.loc[df.iloc[:,0]=="gamma_lower",1].item()
+        gamma_upper = df.loc[df.iloc[:,0]=="gamma_upper",1].item()
+        shape = df.loc[df.iloc[:,0]=="shape",1].item()
+        v_max = df.loc[df.iloc[:,0]=="v_max",1].item()
+        order = df.loc[df.iloc[:,0]=="order",1].item()
+        sigma = df.loc[df.iloc[:,0]=="sigma",1].item()
+
+        spatial = t.RandomElasticAffineCrop(translation_bounds=translation_bounds,
+                                            rotation_bounds=rotation_bounds,
+                                            shear_bounds=shear_bounds,
+                                            scale_bounds=scale_bounds,
+                                            max_elastic_displacement=max_elastic_displacement,
+                                            n_elastic_control_pts=int(n_elastic_control_pts),
+                                            n_elastic_steps=int(n_elastic_steps),
+                                            patch_size=None,
+                                            n_dims=X
+        )
+        contrast = t.ContrastAugmentation(gamma_range=(gamma_lower, gamma_upper))
+        bias = t.BiasField(shape=int(shape),
+                           v_max=v_max,
+                           order=int(order)
+        )
+        noise = t.GaussianNoise(sigma=sigma)
+
+        augmentation = t.Compose([patch, spatial, flip, contrast, bias, noise, norm, onehot])
+
+    else:
+        augmentation = t.Compose([patch, flip, norm, onehot])
+
+    test_augmentation = t.Compose([patch, norm, onehot])
     
-    # Get subject indices for train/valid/test
+    return augmentation, test_augmentation
+
+
+
+def get_inds(data_config:str):
     with open(data_config, 'r') as f:
         lines = f.readlines()
 
     n_subjects = len(lines)
     x = int(0.2*n_subjects)
-    
+
     all_inds = list(range(0,n_subjects))
     random.shuffle(all_inds)
     test_inds = all_inds[:x]
     valid_inds = all_inds[x:2*x]
     train_inds = all_inds[2*x:]
+
+    return train_inds, valid_inds, test_inds
     
 
-    # Get each cohort
+
+def call_dataset(data_config:str, augmentation_config:str, **kwargs):
+    data_labels = (0, 883, 900, 903, 904)
+    transform = transforms.ToTensor()
+    train_augmentation, test_augmentation = augmentation_setup(augmentation_config, data_labels)
+
+    train_inds, valid_inds, test_inds = get_inds(data_config)
+    
     train = PituitaryPinealDataset(data_inds=train_inds,
                                    image_label_list=data_config,
                                    transform=transform,
-                                   augmentation=augmentation,
-                                   data_labels=data_labels,
+                                   augmentation=train_augmentation,
+                                   n_class=len(data_labels),
     )
     valid = PituitaryPinealDataset(data_inds=valid_inds,
                                    image_label_list=data_config,
                                    transform=transform,
-                                   augmentation=augmentation,
-                                   data_labels=data_labels,
+                                   augmentation=train_augmentation,
+                                   n_class=len(data_labels),
     )
     test = PituitaryPinealDataset(data_inds=test_inds,
-                                   image_label_list=data_config,
-                                   transform=transform,
-                                   augmentation=augmentation,
-                                   data_labels=data_labels,
+                                  image_label_list=data_config,
+                                  transform=transform,
+                                  augmentation=test_augmentation,
+                                  n_class=len(data_labels),
     )
-    return train, valid, test, len(data_labels)
+    return train, valid, test
