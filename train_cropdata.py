@@ -67,7 +67,7 @@ metrics=[losses.MeanDice()]
 
 trainee = segment(model=model, optimizer=optimizer, loss=loss, \
                   train_data=train_data, valid_data=valid_data, test_data=test_data, output_folder=output_dir,
-                  seed=0, lr_start=0.1, lr_param=lr_param,
+                  seed=0, lr_start=lr_start, lr_param=lr_param,
                   train_metrics=metrics, valid_metrics=metrics, test_metrics=metrics,
                   save_train_output_every=1, save_valid_output_every=0, schedule='poly',
 )
