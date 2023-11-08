@@ -8,6 +8,7 @@ import pandas as pd
 import nibabel as nib
 import numpy as np
 import torch
+
 from torch.utils.data import Dataset
 from torchvision import transforms
 import freesurfer as fs
@@ -30,7 +31,8 @@ class PituitaryPinealDataset(Dataset):
                  image_label_list=None,
                  data_dir=None,
                  transform=None,
-                 augmentation=None,
+                 init_augmentation=None,
+                 full_augmentation=None,
                  output_aug_param_path:str=None,
                  save_image_label_list=False,
                  make_RAS=True,
@@ -45,7 +47,8 @@ class PituitaryPinealDataset(Dataset):
         self.make_RAS = make_RAS
         
         self.transform = transform
-        self.augmentation = augmentation
+        self.init_augmentation = init_augmentation
+        self.full_augmentation = full_augmentation
         self.output_aug_param_path = output_aug_param_path
 
         if image_label_list is not None:
@@ -94,9 +97,6 @@ class PituitaryPinealDataset(Dataset):
         else:
             raise ValueError('Either data_dir or image_label_list must be provided')
 
-        #log success
-        num_pairs = len(self.image_files)
-        logging.info(f'Data loaded successfully with {num_pairs} image/label pairs')
 
         if save_image_label_list:
             if not image_label_list and save_image_label_list:
@@ -144,8 +144,6 @@ class PituitaryPinealDataset(Dataset):
         images = [self._load_image(Path(img_path)) for img_path in img_paths]
         label = self._load_label(Path(label_path))
 
-        #label_basename = '.'.join(label_path.split('/')[-1].split('.')[0:2])
-
         if self.transform is not None:
             label = self.transform(label)
             images = [self.transform(image) for image in images]
@@ -153,22 +151,22 @@ class PituitaryPinealDataset(Dataset):
         images = torch.stack(images, dim=0)
         label = torch.from_numpy(np.expand_dims(label, axis=0))
 
-        if self.augmentation is not None:
-            images, label = self.augmentation(images, label)
+        #if self.full_augmentation is not None:
+        #    images, label = self.augmentation(images, label)
 
         return images, label, idx
 
 
 
-def augmentation_setup(augmentation_config:str=None, label_values=None, **kwargs):
+def augmentation_setup(aug_config:str=None, label_values:str=None, **kwargs):
     X = 3
     patch = t.GetPatch(patch_size=(70, 60, 80), n_dims=X)
     flip = t.RandomLRFlip(chance=0.5)
     norm = t.MinMaxNorm()
     onehot = t.AssignOneHotLabels(label_values=label_values, n_dims=X)
     
-    if augmentation_config is not None:
-        df = pd.read_table(augmentation_config,
+    if aug_config is not None:
+        df = pd.read_table(aug_config,
                            delimiter='=',
                            header=None,
         )
@@ -205,7 +203,6 @@ def augmentation_setup(augmentation_config:str=None, label_values=None, **kwargs
         noise = t.GaussianNoise(sigma=sigma)
 
         augmentation = t.Compose([patch, spatial, flip, contrast, bias, noise, norm, onehot])
-
     else:
         augmentation = t.Compose([patch, flip, norm, onehot])
 
@@ -232,29 +229,33 @@ def get_inds(data_config:str):
     
 
 
-def call_dataset(data_config:str, augmentation_config:str, **kwargs):
+def call_dataset(data_config:str, aug_config:str=None, **kwargs):
     data_labels = (0, 883, 900, 903, 904)
     transform = transforms.ToTensor()
-    train_augmentation, test_augmentation = augmentation_setup(augmentation_config, data_labels)
+    train_augmentation, test_augmentation = augmentation_setup(aug_config=aug_config,
+                                                               label_values=data_labels)
 
     train_inds, valid_inds, test_inds = get_inds(data_config)
     
     train = PituitaryPinealDataset(data_inds=train_inds,
                                    image_label_list=data_config,
                                    transform=transform,
-                                   augmentation=train_augmentation,
+                                   init_augmentation=test_augmentation,
+                                   full_augmentation=train_augmentation,
                                    n_class=len(data_labels),
     )
     valid = PituitaryPinealDataset(data_inds=valid_inds,
                                    image_label_list=data_config,
                                    transform=transform,
-                                   augmentation=train_augmentation,
+                                   init_augmentation=test_augmentation,
+                                   full_augmentation=train_augmentation,
                                    n_class=len(data_labels),
     )
     test = PituitaryPinealDataset(data_inds=test_inds,
                                   image_label_list=data_config,
                                   transform=transform,
-                                  augmentation=test_augmentation,
+                                  init_augmentation=test_augmentation,
+                                  full_augmentation=test_augmentation,
                                   n_class=len(data_labels),
     )
     return train, valid, test
