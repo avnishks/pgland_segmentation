@@ -21,18 +21,25 @@ from dataset import transforms as t
 import options
 import models
 from models import optimizers, unet
-from models.segment import Segment as segment
+from models.segment_pl import Segment as segment
 import models.loss_functions as loss_fns
 from models.progress import ProgressBar as ProgressBar
 from models import losses
 
 
 
+def setup_log(file, str):
+    f = open(file, 'w')
+    f.write(str + '\n')
+    f.close()
+    
+
+
 ### Arg parsing
 parser = argparse.ArgumentParser()
-parser = pl.Trainer.add_argparse_args(parser)
+#parser = pl.Trainer.add_argparse(parser)
 parser = options.set_argparse_defs(parser)
-parser = options.add_argparse_args(parser)
+parser = options.add_argparse(parser)
 args = parser.parse_args()
 
 
@@ -59,37 +66,42 @@ train_data, valid_data, test_data = call_dataset(data_config=data_config, aug_co
 train_loader = DataLoader(train_data,
                           batch_size=args.batch_size,
                           shuffle=True,
-                          num_workers=4,
+                          num_workers=args.n_workers,
                           pin_memory=True
 )
 valid_loader = DataLoader(valid_data,
                           batch_size=args.batch_size,
                           shuffle=True,
-                          num_workers=4,
+                          num_workers=args.n_workers,
                           pin_memory=True
 )
 test_loader = DataLoader(test_data,
                          batch_size=args.batch_size,
                          shuffle=False,
-                         num_workers=4,
+                         num_workers=args.n_workers,
                          pin_memory=True
 )
 
 
 ### Model set-up ###
-lr_start = args.lr_start
-lr_param = args.lr_param
-decay = args.decay
+lr_start = 0.0001 #args.lr_start
+lr_param = 0.1 #args.lr_param
+decay = 0.002 #args.weight_decay
+#schedule = 'poly' #args.lr_scheduler
 
-network = models.unet.__dict__[args.network](in_channels=1,
-                                      out_channels=train_data.__numclass__()
+network = models.unet.__dict__[args.network](in_channels=train_data.__numinput__(),
+                                             out_channels=train_data.__numclass__(),
 ).to(device)
-optimizer =  models.optimizers.__dict__[args.optim](network.parameters(), lr=lr_start, weight_decay=decay)
+optimizer = models.optimizers.adam(network.parameters(),
+                                   lr=lr_start,
+                                   weight_decay=decay
+)
+schedule = torch.optim.lr_scheduler.PolynomialLR(optimizer, total_iters=5, power=0.9)
 loss_fn =  loss_fns.__dict__[args.loss]
-metrics_train = [models.losses.__dict__[args.metrics_train]()]
-metrics_test = [models.losses.__dict__[args.metrics_test]()]
-metrics_valid = [models.losses.__dict__[args.metrics_valid]()]
-schedule = args.schedule
+
+metrics_train = [models.losses.__dict__[args.metrics_train[i]]() for i in range(len(args.metrics_train))]
+metrics_test = [models.losses.__dict__[args.metrics_test[i]]() for i in range(len(args.metrics_test))]
+metrics_valid = [models.losses.__dict__[args.metrics_valid[i]]() for i in range(len(args.metrics_valid))]
 
 output_folder = args.output_dir
 if output_folder is not None and not os.path.exists(output_folder):  os.mkdir(output_folder)
@@ -107,11 +119,21 @@ trainee = segment(model=network,
                   train_metrics=metrics_train,
                   valid_metrics=metrics_valid,
                   test_metrics=metrics_test,
-                  save_train_output_every=1,
-                  save_valid_output_every=0,
+                  save_train_output_every=50,
+                  save_valid_output_every=50,
                   schedule=schedule,
 )
 
+
+### Set up log files
+"""
+setup_log(os.path.join(output_folder, "training_loss.txt"), "Epoch AvgLoss " + \
+          " ".join(args.metrics_train[i] for i in range(len(args.metrics_train)))) + \
+          " ".join(args.metrics_valid[i] for i in range(len(args.metrics_valid)))
+"""
+if output_folder is not None:
+    setup_log(os.path.join(output_folder, "testing_loss.txt"), "ImgID Loss Accuracy " + \
+              " ".join(args.metrics_test[i] for i in range(len(args.metrics_test))))
 
 
 ### Run ? ###
@@ -124,13 +146,14 @@ callbacks = [pl_ModelCheckpoint(monitor='valid_metric_0',
                                 filename='best',
                                 save_last=True,
                                 every_n_epochs=1),
-             ProgressBar(refresh_rate=0)]
-
+]
 
 trainer = pl.Trainer(accelerator='gpu',
                      callbacks=callbacks,
+                     enable_progress_bar=False,
                      devices=1,
-                     max_epochs=args.max_n_epochs,
+                     log_every_n_steps=len(train_loader),
+                     max_epochs=2000, #args.max_n_epochs,
                      gradient_clip_val=0.5,
                      gradient_clip_algorithm='value',
                      precision=16,
