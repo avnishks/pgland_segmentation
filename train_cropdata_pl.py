@@ -87,7 +87,7 @@ test_loader = DataLoader(test_data,
 lr_start = 0.0001 #args.lr_start
 lr_param = 0.1 #args.lr_param
 decay = 0.002 #args.weight_decay
-#schedule = 'poly' #args.lr_scheduler
+schedule = 'poly' #args.lr_scheduler
 
 network = models.unet.__dict__[args.network](in_channels=train_data.__numinput__(),
                                              out_channels=train_data.__numclass__(),
@@ -96,7 +96,7 @@ optimizer = models.optimizers.adam(network.parameters(),
                                    lr=lr_start,
                                    weight_decay=decay
 )
-schedule = torch.optim.lr_scheduler.PolynomialLR(optimizer, total_iters=5, power=0.9)
+#schedule = torch.optim.lr_scheduler.PolynomialLR(optimizer, total_iters=5, power=0.9)
 loss_fn =  loss_fns.__dict__[args.loss]
 
 metrics_train = [models.losses.__dict__[args.metrics_train[i]]() for i in range(len(args.metrics_train))]

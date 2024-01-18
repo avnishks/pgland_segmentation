@@ -201,7 +201,6 @@ class Segment(pl.LightningModule):
             f.write('\n')
             f.close()
 
-    """
     def configure_optimizers(self):
         def lr(step):
             if self.schedule == 'poly':
@@ -220,4 +219,4 @@ class Segment(pl.LightningModule):
 
         return {'optimizer':self.optimizer, 'lr_scheduler':lr_scheduler}
     
-    """
+

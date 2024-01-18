@@ -63,7 +63,7 @@ function call-train_crop(){
     metrics_train="MeanDice" # HausDist2"
     metrics_valid="MeanDice" # HausDist2"
     metrics_test="MeanDice" # HausDist2"
-    output_dir='data/results/sanity_check_pl2'
+    output_dir='data/results/sanity_check_pl'
     mkdir -p $output_dir
     
     # Run train
