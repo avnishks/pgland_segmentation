@@ -1,0 +1,5 @@
+
+optimizer=Adam
+LR=0.001
+weight_decay=in
+momentum=0

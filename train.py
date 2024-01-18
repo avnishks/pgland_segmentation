@@ -1,118 +1,213 @@
-import logging
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
-
-from utils.data_utils import PituitaryPinealDataset
-from utils.model_utils import UNet3D
-from utils import transform_utils as t_utils
-
-from torchvision import transforms
-from torchvision.transforms import Compose, Resize, ToTensor
-from torchsummary import summary
-from torch.cuda.amp import autocast
-
-import pandas as pd
+import os, warnings, argparse, logging, random
 import numpy as np
 import nibabel as nib
+import freesurfer as fs
+
+import torch
+import torch.nn as nn
+import torch.optim
+from torch.utils.data import DataLoader
+
+from data_utils.pituitarypineal_crop import call_dataset
+from data_utils import transforms as t
+
+import options
+import models
+from models import optimizers, unet, metrics
+from models.segment import Segment as segment
+import models.loss_functions as loss_fns
 
 
 
-### Data visualization tool
-def call_freeview(img, onehot):
-  volume = img[0,0,:]
-  seg = torch.zeros(volume.shape)
-
-  for i in range(onehot.shape[1]):
-    seg += i * onehot[0,i,:]
-
-  fv = fs.Freeview()
-  fv.vol(volume)
-  fv.vol(seg, colormap='lut')
-  fv.show()
+def _set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.autograd.set_detect_anomaly(True)
+    os.environ["PYTHONHASHSEED"] = str(seed)
 
 
 
-### Define loops up here (clean up later) ###
-def training_loop(dataloader, model, loss_fn, optimizer):
-  model.train()
-  for X, y in dataloader:
-    optimizer.zero_grad()
-
-    X, y = X.to(device), y.to(device)
-    with autocast():
-      y_pred = model(X)
-      loss = loss_fn(y_pred, y)
-
-    loss.backward()
-    optimizer.step()
-
-  print(f'Training loss: {loss.item():>.4f}')
+def _setup_log(file, str):
+    f = open(file, 'w')
+    f.write(str + '\n')
+    f.close()
+    
 
 
-def validation_loop(dataloader, model, loss_fn):
-  size = len(dataloader.dataset)
-  num_batches = len(dataloader)
-  loss, correct = 0, 0
+def _config_optimizer(config, network_params):
+    optimizerID = config.optimizer
+    schedulerID = config.lr_scheduler
 
-  model.eval()
-  for X, y in dataloader:
-    X, y = X.to(device), y.to(device)
+    lr_start = config.lr_start
+    dampening = config.dampening
+    weight_decay = config.weight_decay
 
-    with torch.no_grad():
-      y_pred = model(X)
-      loss += loss_fn(y_pred, y)
-      correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()/y.numel()
+    if optimizerID=="Adam" or optimizerID=="AdamW":
+        betas = (config.beta1, config.beta2)
+        optimizer = torch.optim.__dict__[optimizerID](params=network_params,
+                                                      betas=betas,
+                                                      lr=lr_start,
+                                                      weight_decay=weight_decay
+        )
+    elif optimizerID=="SGD":
+        momentum = config.momentum
+        optimizer = torch.optim.__dict__[optimizerID](params=network_params,
+                                                      lr=lr_start,
+                                                      momentum=momentum,
+                                                      weight_decay=weight_decay,
+                                                      dampening=dampening
+        )
+    else:
+        raise Exception('invalid optimizer')
 
-  loss /= num_batches
-  correct /= size
+    if schedulerID=="StepLR":
+        scheduler = torch.optim.lr_scheduler.__dict__[schedulerID](optimizer, step_size=5)
+    elif schedulerID=="LinearLR":
+        scheduler = torch.optim.lr_scheduler.__dict__[schedulerID](optimizer)
+    elif schedulerID=="PolynomialLR":
+        scheduler = torch.optim.lr_scheduler.__dict__[schedulerID](optimizer, total_iters=-1, power=0.1)
+    elif schedulerID=="ExponentialLR":
+        scheduler = torch.optim.lr_scheduler.__dict__[schedulerID](optimizer, gamma=0.9)
+    else:
+        raise Exception('invalid LR scheduler')
 
-  print(f'Accuracy: {(100*correct):>0.1f}%,  Avg loss: {valid_loss:>.4f}') # accuracy isn't correct here
-
-
-
-### Set up
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') 
-logging.basicConfig(format='%(asctime)s - %(message)s', level=logging.INFO)
-
-data_config = 'data_config.csv'
-train_data, valid_data, test_data, n_labels = call_dataset(data_config)
-
-train_loader = DataLoader(train_data, batch_size=1, shuffle=True)
-valid_loader = DataLoader(valid_data, batch_size=1, shuffle=True)
-test_loader = DataLoader(test_data, batch_size=1, shuffle=True)
-
-model = UNet3D(in_channels=1, 
-               out_channels=len(data_labels),
-               n_features_start=24,
-               num_blocks=3, 
-               num_convs_per_block=2, 
-               activation_type="ReLU",
-               pooling_type="MaxPool3d"
-).to(device)
-
-optimizer = torch.optim.Adam(model.parameters())
-loss_fn = nn.BCEWithLogitsLoss()
+    return optimizer, scheduler
 
 
 
-### Training ###
-n_epochs = 10
-for epoch in range(n_epochs):
-  print(f"\nEpoch [{epoch+1}/{n_epochs}]\n-------------------")
-  training_loop(train_loader, model, loss_fn, optimizer)
-  validation_loop(valid_loader, model, loss_fn)
+def _config():
+    parser = argparse.ArgumentParser()
+    parser = options.add_argparse(parser)
+    pargs = parser.parse_args()
 
-print('Testing...\n-------------------')
-test_loss = 0
-for X, y in test_loader:
-    X, y = X.to(device), y.to(device)
+    seed = pargs.seed
+    _set_seed(seed)
 
-    with torch.no_grad():
-      y_pred = model(X)
-      test_loss += loss_fn(y_pred, y)
-      correct += (y_pred.argmax(1) == y).type(torch.float32).sum().item()/y.numel()
+    return pargs
 
-test_loss /= len(test_loader)
-print(f'Loss: {test_loss:>.4f}')
+
+
+def main(pargs):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    torch.set_float32_matmul_precision('medium')
+    
+    ### Data set-up ###
+    aug_config = pargs.aug_config
+    batch_size = pargs.batch_size
+    data_config = pargs.data_config
+    n_workers = pargs.n_workers
+
+    train_data, valid_data, test_data = call_dataset(data_config=data_config, aug_config=aug_config)
+
+    train_loader = DataLoader(train_data,
+                              batch_size=batch_size,
+                              shuffle=True,
+                              num_workers=n_workers,
+                              pin_memory=True
+    )
+    valid_loader = DataLoader(valid_data,
+                              batch_size=batch_size,
+                              shuffle=True,
+                              num_workers=n_workers,
+                              pin_memory=True
+    )
+    test_loader = DataLoader(test_data,
+                             batch_size=batch_size,
+                             shuffle=False,
+                             num_workers=n_workers,
+                             pin_memory=True
+    )
+    
+    
+    ### Model set-up ###
+    activation_function = pargs.activation_function
+    n_levels = pargs.n_levels
+    max_n_epochs = pargs.max_n_epochs
+    network = pargs.network
+    pooling_function = pargs.pooling_function
+    
+    network = models.unet.__dict__[network](in_channels=train_data.__numinput__(),
+                                            out_channels=train_data.__numclass__(),
+    ).to(device)
+    
+
+    ### Optimizer set-up ###
+    loss_function =  loss_fns.__dict__[pargs.loss]
+    #optimizer, lr_scheduler = _config_optimizer(pargs, network.parameters())
+
+    lr_start = 0.0001 #args.lr_start
+    lr_param = 0.1 #args.lr_param
+    decay = 0.002 #args.weight_decay
+    optimizer = models.optimizers.adam(network.parameters(),
+                                       lr=lr_start,
+                                       weight_decay=decay
+    )
+    lr_scheduler = torch.optim.lr_scheduler.PolynomialLR(optimizer, total_iters=5, power=0.9)
+
+    ## Metrics set-up ###
+    metrics_train = [models.metrics.__dict__[pargs.metrics_train[i]] \
+                     for i in range(len(pargs.metrics_train))]
+    metrics_test = [models.metrics.__dict__[pargs.metrics_test[i]] \
+                    for i in range(len(pargs.metrics_test))]
+    metrics_valid = [models.metrics.__dict__[pargs.metrics_valid[i]] \
+                     for i in range(len(pargs.metrics_valid))]
+
+
+    ### Logging set-up ###
+    output_folder = pargs.output_dir
+    if output_folder is not None:
+        if not os.path.exists(output_folder):  os.mkdir(output_folder)
+        _setup_log(os.path.join(output_folder, "training_log.txt"), "Epoch Loss " + \
+                   " ".join(pargs.metrics_train[i] for i in range(len(pargs.metrics_train))))
+        _setup_log(os.path.join(output_folder, "validation_log.txt"), "Epoch Loss " + \
+                   " ".join(pargs.metrics_valid[i] for i in range(len(pargs.metrics_valid))))
+        _setup_log(os.path.join(output_folder, "testing_log.txt"), "ImgID Loss " + \
+                   " ".join(pargs.metrics_test[i] for i in range(len(pargs.metrics_test))))
+        
+        
+    ### Parse everything into trainer ###
+    save_train_output_every=1
+    save_valid_output_every=1
+    
+    trainer = segment(model=network,
+                      optimizer=optimizer,
+                      scheduler=lr_scheduler,
+                      loss=loss_function,
+                      start_full_aug_on=50,
+                      output_folder=output_folder,
+                      device=device,
+    )
+        
+
+    ### Run ###
+    print("Train: %d | Valid: %d | Tests: %d" % \
+          (len(train_loader.dataset), len(valid_loader.dataset), len(test_loader.dataset)))
+    
+    n_epochs = max_n_epochs
+    for epoch in range(n_epochs):
+        trainer.train(loader=train_loader,
+                      metrics_list=metrics_train,
+                      epoch=epoch,
+                      save_output=False
+        )
+        trainer.validate(loader=valid_loader,
+                         metrics_list=metrics_valid,
+                         epoch=epoch,
+                         save_output=False
+        )
+        
+    trainer.test(loader=test_loader,
+                 metrics_list=metrics_test,
+                 save_output=True
+    )
+    
+    
+
+##########################
+if __name__ == "__main__":
+    main(_config())
