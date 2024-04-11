@@ -1,0 +1,6 @@
+model:
+  name: UNet3D
+  num_classes: 3
+  # Add other model-specific hyperparameters
+# activation_functions=('ELU' 'ReLU' 'LeakyReLU')
+# n_layers=(3 4)

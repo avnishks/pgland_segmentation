@@ -1,0 +1,28 @@
+dataset:
+  dataset_list_file: data/pgland_cropped_katie/dataset_list.yaml
+  train_file: output/train_dataset_list.yaml
+  val_file: output/val_dataset_list.yaml
+  test_file: output/test_dataset_list.yaml
+  expected_num_channels: 1
+  expected_classes: [0.0, 883.0, 900.0, 903.0, 904.0]
+
+model:
+  name: UNet3D
+  num_classes: 5
+  nb_levels: 4
+  nb_features: 64
+
+
+optimizer:
+  name: Adam
+  learning_rate: 0.001
+  
+training:
+  num_epochs: 25
+  output_folder: output 
+  start_full_aug_on: 10
+  batch_size: 1
+
+evaluation:
+  output_folder: output/evaluation
+  batch_size: 1

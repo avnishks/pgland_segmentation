@@ -1,0 +1,7 @@
+dataset:
+  train_file: configs/train_dataset.yaml
+  val_file: configs/val_dataset.yaml
+  test_file: configs/test_dataset.yaml
+  batch_size: 1
+  expected_num_channels: 1
+  expected_classes: [0.0, 883.0, 900.0, 903.0, 904.0]
